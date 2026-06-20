@@ -10,3 +10,7 @@ scikit-learn==1.9.0
 xgboost==3.2.0
 mlflow==3.13.0
 requests==2.34.2
+# Pin protobuf to the 3.20.x line: newer protobuf raises
+# "Descriptors cannot be created directly" with mlflow's generated code
+# on Streamlit Cloud. 3.20.3 is the last fully compatible release.
+protobuf==3.20.3
