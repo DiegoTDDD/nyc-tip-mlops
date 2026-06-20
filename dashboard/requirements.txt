@@ -1,0 +1,12 @@
+# Minimal dependencies for the Streamlit Cloud deployment of the dashboard.
+# Streamlit Cloud cannot run Docker/FastAPI, so the dashboard loads the
+# champion model directly via mlflow. Keep this list lean for fast builds.
+streamlit==1.58.0
+plotly==5.24.1
+pandas==2.3.3
+numpy==2.4.6
+pyarrow==24.0.0
+scikit-learn==1.9.0
+xgboost==3.2.0
+mlflow==3.13.0
+requests==2.34.2

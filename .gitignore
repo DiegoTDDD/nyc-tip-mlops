@@ -1,0 +1,29 @@
+# ---- Data (large, downloaded separately) --------------------------------
+data/*.parquet
+features/*.parquet
+monitoring/*_snapshot.parquet
+monitoring/drift_report.html
+
+# ---- MLflow tracking store and artifacts --------------------------------
+mlflow.db
+mlruns/
+mlartifacts/
+
+# ---- Python -------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+.venv/
+venv/
+env/
+
+# ---- OS / editor --------------------------------------------------------
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# ---- Misc ---------------------------------------------------------------
+*.log

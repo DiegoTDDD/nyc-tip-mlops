@@ -1,0 +1,29 @@
+# API serving image for the NYC Taxi high-tip classifier.
+#
+# Runtime-only image: it does not bundle the model. The MLflow tracking
+# store (mlflow.db) and artifacts (mlruns/) are mounted as a volume at
+# run time (see docker-compose.yml), which keeps code and model separate
+# -- the production-correct pattern.
+
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# System deps kept minimal; xgboost needs libgomp at runtime.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python deps first for better layer caching.
+COPY requirements-api.txt .
+RUN pip install --no-cache-dir -r requirements-api.txt
+
+# Copy only what the API needs.
+COPY serving/ ./serving/
+
+EXPOSE 8000
+
+# The tracking URI points at the mounted volume (set in compose).
+ENV MLFLOW_TRACKING_URI=sqlite:////app/mlflow.db
+
+CMD ["uvicorn", "serving.app_api:app", "--host", "0.0.0.0", "--port", "8000"]

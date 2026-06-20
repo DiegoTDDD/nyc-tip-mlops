@@ -1,0 +1,38 @@
+# Local MLOps stack for the NYC Taxi high-tip classifier.
+#
+# Two services:
+#   mlflow-ui : the MLflow tracking server / experiment UI (port 5000)
+#   api       : the FastAPI serving layer (port 8000)
+#
+# Both mount the project root so they share the same SQLite tracking
+# store (mlflow.db) and artifact tree (mlruns/). Start everything with:
+#
+#     docker compose up --build
+#
+# Then:
+#   - API docs : http://localhost:8000/docs
+#   - MLflow UI: http://localhost:5000
+
+services:
+  mlflow-ui:
+    image: python:3.11-slim
+    working_dir: /app
+    command: ["bash", "-lc", "pip install --no-cache-dir mlflow==3.13.0 && mlflow server --backend-store-uri sqlite:////app/mlflow.db --host 0.0.0.0 --port 5000 --allowed-hosts '*' --no-serve-artifacts"]
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./:/app
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    ports:
+      - "8000:8000"
+    environment:
+      MLFLOW_TRACKING_URI: sqlite:////app/mlflow.db
+    volumes:
+      - ./mlflow.db:/app/mlflow.db
+      - ./mlruns:/app/mlruns
+    depends_on:
+      - mlflow-ui

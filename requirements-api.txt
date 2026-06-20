@@ -1,0 +1,9 @@
+# Minimal runtime deps for the FastAPI serving container.
+mlflow==3.13.0
+xgboost==3.2.0
+scikit-learn==1.9.0
+pandas==2.3.3
+pyarrow==24.0.0
+fastapi==0.136.3
+uvicorn==0.34.0
+pydantic==2.13.4

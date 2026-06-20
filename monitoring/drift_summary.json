@@ -1,0 +1,48 @@
+{
+  "n_columns_monitored": 8,
+  "n_columns_drifted": 1,
+  "drift_share": 0.125,
+  "retrain_recommended": false,
+  "per_column": {
+    "trip_distance": {
+      "drift_score": 0.026121053467098802,
+      "threshold": 0.1,
+      "drifted": false
+    },
+    "trip_duration_min": {
+      "drift_score": 0.02907331166492327,
+      "threshold": 0.1,
+      "drifted": false
+    },
+    "pickup_hour": {
+      "drift_score": 0.026190813766537396,
+      "threshold": 0.1,
+      "drifted": false
+    },
+    "pu_location_id": {
+      "drift_score": 0.01484297618795196,
+      "threshold": 0.1,
+      "drifted": false
+    },
+    "do_location_id": {
+      "drift_score": 0.011083090870981825,
+      "threshold": 0.1,
+      "drifted": false
+    },
+    "pickup_dayofweek": {
+      "drift_score": 0.054513096682024996,
+      "threshold": 0.1,
+      "drifted": false
+    },
+    "passenger_count": {
+      "drift_score": 0.03974148667806804,
+      "threshold": 0.1,
+      "drifted": false
+    },
+    "payment_type": {
+      "drift_score": 0.11598455185907007,
+      "threshold": 0.1,
+      "drifted": true
+    }
+  }
+}

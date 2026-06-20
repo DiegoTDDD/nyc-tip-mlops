@@ -1,0 +1,80 @@
+# CI/CD for the NYC Taxi high-tip MLOps project.
+#
+# Two jobs:
+#   test    : runs the unit-test suite on every push and pull request.
+#   retrain : on a weekly schedule (and on demand) regenerates a small
+#             sample, runs the full training + MLflow logging + registry
+#             promotion path, and uploads the resulting model artifacts.
+#             This demonstrates the automated-retraining loop that closes
+#             the MLOps cycle.
+#
+# The retrain job trains on a small synthetic sample (tests/make_sample_data.py)
+# rather than the multi-hundred-MB monthly parquet, so it runs in seconds
+# and never depends on an external download.
+
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  schedule:
+    # Every Monday at 06:00 UTC -- the "scheduled retrain" trigger.
+    - cron: "0 6 * * 1"
+  workflow_dispatch: {}   # allows manual "Run workflow" from the Actions tab
+
+jobs:
+  test:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pandas numpy pytest pyarrow
+
+      - name: Run unit tests
+        run: pytest tests/test_features.py -v
+
+  retrain:
+    name: Scheduled retrain
+    runs-on: ubuntu-latest
+    # Run after tests pass; only on schedule or manual dispatch, not on
+    # every push (keeps PR feedback fast).
+    needs: test
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install training dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pandas numpy scikit-learn xgboost mlflow pyarrow matplotlib
+
+      - name: Generate sample data
+        run: python tests/make_sample_data.py
+
+      - name: Train, log to MLflow, and promote champion
+        run: python training/train_v2.py --sample 0
+
+      - name: Upload model + tracking store
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlflow-model
+          path: |
+            mlflow.db
+            mlruns/
+          retention-days: 14

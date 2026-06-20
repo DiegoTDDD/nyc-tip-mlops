@@ -1,0 +1,33 @@
+# Full project dependencies (training, serving, monitoring, dashboard).
+# Pinned to the versions used during development for reproducibility.
+#
+# For the FastAPI serving container a slimmer pinned set lives in
+# requirements-api.txt. For the Streamlit Cloud deployment a minimal set
+# lives in dashboard/requirements.txt.
+
+# --- Core data / ML ---
+pandas==2.3.3
+numpy==2.4.6
+pyarrow==24.0.0
+scikit-learn==1.9.0
+xgboost==3.2.0
+
+# --- MLOps platform ---
+mlflow==3.13.0
+feast==0.64.0
+evidently==0.7.21
+
+# --- Serving ---
+fastapi==0.136.3
+uvicorn==0.34.0
+pydantic==2.13.4
+
+# --- Dashboard ---
+streamlit==1.58.0
+plotly==5.24.1
+
+# --- Plotting (training diagnostics) ---
+matplotlib==3.11.0
+
+# --- Testing ---
+pytest==9.1.1
