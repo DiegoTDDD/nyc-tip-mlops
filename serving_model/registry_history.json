@@ -1,0 +1,18 @@
+[
+  {
+    "version": 1,
+    "val_auc": 0.6233641030803276,
+    "val_f1": 0.7086494266214773,
+    "val_precision": 0.8132432547632241,
+    "val_recall": 0.6278939660704589,
+    "is_champion": false
+  },
+  {
+    "version": 2,
+    "val_auc": 0.6239206882792343,
+    "val_f1": 0.7039314745736764,
+    "val_precision": 0.8133801601546321,
+    "val_recall": 0.6204442981734408,
+    "is_champion": true
+  }
+]

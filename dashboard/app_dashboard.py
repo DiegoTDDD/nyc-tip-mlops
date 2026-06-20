@@ -46,6 +46,9 @@ TRACKING_URI = os.environ.get("MLFLOW_TRACKING_URI", "sqlite:///mlflow.db")
 REGISTERED_MODEL_NAME = "nyc_tip_classifier"
 CHAMPION_ALIAS = "champion"
 DRIFT_SUMMARY_PATH = "monitoring/drift_summary.json"
+# Lightweight, version-controlled bundle used when the MLflow store
+# (mlflow.db / mlruns/) is not available, e.g. on Streamlit Cloud.
+SERVING_MODEL_DIR = "serving_model"
 API_URL = os.environ.get("PREDICT_API_URL", "http://localhost:8000")
 
 MODEL_FEATURES = [
@@ -75,28 +78,44 @@ def get_mlflow_client():
 
 @st.cache_data(show_spinner=False)
 def load_registry_history() -> pd.DataFrame:
-    """All registered versions + their validation AUC."""
-    client = get_mlflow_client()
-    rows = []
-    champ_version = None
+    """All registered versions + their validation AUC.
+
+    Prefers the live MLflow registry; falls back to the version-controlled
+    serving_model/registry_history.json when MLflow is unavailable
+    (e.g. on Streamlit Cloud).
+    """
     try:
-        champ = client.get_model_version_by_alias(REGISTERED_MODEL_NAME, CHAMPION_ALIAS)
-        champ_version = champ.version
+        client = get_mlflow_client()
+        rows = []
+        champ_version = None
+        try:
+            champ = client.get_model_version_by_alias(REGISTERED_MODEL_NAME, CHAMPION_ALIAS)
+            champ_version = champ.version
+        except Exception:
+            pass
+        for mv in client.search_model_versions(f"name='{REGISTERED_MODEL_NAME}'"):
+            run = client.get_run(mv.run_id)
+            rows.append({
+                "version": int(mv.version),
+                "val_auc": run.data.metrics.get("val_auc"),
+                "val_f1": run.data.metrics.get("val_f1"),
+                "val_precision": run.data.metrics.get("val_precision"),
+                "val_recall": run.data.metrics.get("val_recall"),
+                "is_champion": mv.version == champ_version,
+                "created": datetime.fromtimestamp(mv.creation_timestamp / 1000),
+            })
+        if rows:
+            return pd.DataFrame(rows).sort_values("version")
     except Exception:
         pass
-    for mv in client.search_model_versions(f"name='{REGISTERED_MODEL_NAME}'"):
-        run = client.get_run(mv.run_id)
-        rows.append({
-            "version": int(mv.version),
-            "val_auc": run.data.metrics.get("val_auc"),
-            "val_f1": run.data.metrics.get("val_f1"),
-            "val_precision": run.data.metrics.get("val_precision"),
-            "val_recall": run.data.metrics.get("val_recall"),
-            "is_champion": mv.version == champ_version,
-            "created": datetime.fromtimestamp(mv.creation_timestamp / 1000),
-        })
-    df = pd.DataFrame(rows).sort_values("version") if rows else pd.DataFrame()
-    return df
+
+    # Fallback: version-controlled bundle.
+    hist_path = os.path.join(SERVING_MODEL_DIR, "registry_history.json")
+    if os.path.exists(hist_path):
+        with open(hist_path) as f:
+            rows = json.load(f)
+        return pd.DataFrame(rows).sort_values("version") if rows else pd.DataFrame()
+    return pd.DataFrame()
 
 
 @st.cache_data(show_spinner=False)
@@ -109,17 +128,39 @@ def load_drift_summary() -> dict | None:
 
 @st.cache_resource(show_spinner=False)
 def load_local_model():
-    """Fallback model + zone encodings for live prediction."""
+    """Champion model + zone encodings for live prediction.
+
+    Prefers the live MLflow registry; falls back to the version-controlled
+    serving_model/ bundle when MLflow is unavailable (e.g. Streamlit Cloud).
+    """
     import mlflow.pyfunc
-    client = get_mlflow_client()
-    mv = client.get_model_version_by_alias(REGISTERED_MODEL_NAME, CHAMPION_ALIAS)
-    model = mlflow.pyfunc.load_model(f"models:/{REGISTERED_MODEL_NAME}@{CHAMPION_ALIAS}")
-    enc_path = client.download_artifacts(mv.run_id, "zone_encodings.json")
-    with open(enc_path) as f:
+
+    # Try the live MLflow registry first.
+    try:
+        client = get_mlflow_client()
+        mv = client.get_model_version_by_alias(REGISTERED_MODEL_NAME, CHAMPION_ALIAS)
+        model = mlflow.pyfunc.load_model(f"models:/{REGISTERED_MODEL_NAME}@{CHAMPION_ALIAS}")
+        enc_path = client.download_artifacts(mv.run_id, "zone_encodings.json")
+        with open(enc_path) as f:
+            enc = json.load(f)
+        pu_map = {int(k): v for k, v in enc["pu_zone_tip_rate"].items()}
+        do_map = {int(k): v for k, v in enc["do_zone_tip_rate"].items()}
+        return model, pu_map, do_map, enc["pu_prior"], enc["do_prior"], mv.version
+    except Exception:
+        pass
+
+    # Fallback: version-controlled bundle.
+    model = mlflow.pyfunc.load_model(os.path.join(SERVING_MODEL_DIR, "model"))
+    with open(os.path.join(SERVING_MODEL_DIR, "zone_encodings.json")) as f:
         enc = json.load(f)
     pu_map = {int(k): v for k, v in enc["pu_zone_tip_rate"].items()}
     do_map = {int(k): v for k, v in enc["do_zone_tip_rate"].items()}
-    return model, pu_map, do_map, enc["pu_prior"], enc["do_prior"], mv.version
+    version = "?"
+    champ_path = os.path.join(SERVING_MODEL_DIR, "champion.json")
+    if os.path.exists(champ_path):
+        with open(champ_path) as f:
+            version = json.load(f).get("version", "?")
+    return model, pu_map, do_map, enc["pu_prior"], enc["do_prior"], version
 
 
 def engineer_row(dist, pickup_dt, dropoff_dt, pu_id, do_id, pax,

@@ -1,0 +1,35 @@
+artifact_path: file:///C:/Users/Usuario/Desktop/nyc-tip-mlops/mlruns/1/models/m-af8095845671452faeb70077b329c843/artifacts
+flavors:
+  python_function:
+    data: model.ubj
+    env:
+      conda: conda.yaml
+      virtualenv: python_env.yaml
+    loader_module: mlflow.xgboost
+    python_version: 3.11.15
+  xgboost:
+    code: null
+    data: model.ubj
+    model_class: xgboost.sklearn.XGBClassifier
+    model_format: ubj
+    xgb_version: 3.2.0
+is_signature_from_type_hint: false
+mlflow_version: 3.13.0
+model_id: m-af8095845671452faeb70077b329c843
+model_size_bytes: 3687923
+model_uuid: m-af8095845671452faeb70077b329c843
+prompts: null
+run_id: b15110030bd74dc3b18174b316bedf21
+signature:
+  inputs: '[{"type": "double", "name": "trip_distance", "required": true}, {"type":
+    "double", "name": "trip_duration_min", "required": true}, {"type": "double", "name":
+    "avg_speed_mph", "required": true}, {"type": "integer", "name": "pickup_dayofweek",
+    "required": true}, {"type": "long", "name": "is_weekend", "required": true}, {"type":
+    "long", "name": "passenger_count", "required": true}, {"type": "double", "name":
+    "hour_sin", "required": true}, {"type": "double", "name": "hour_cos", "required":
+    true}, {"type": "double", "name": "pu_zone_tip_rate", "required": true}, {"type":
+    "double", "name": "do_zone_tip_rate", "required": true}]'
+  outputs: '[{"type": "tensor", "tensor-spec": {"dtype": "float32", "shape": [-1]}}]'
+  params: null
+type_hint_from_example: false
+utc_time_created: '2026-06-13 15:15:23.446927'
