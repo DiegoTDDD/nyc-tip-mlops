@@ -12,7 +12,9 @@ honest (no label leakage), which makes it genuinely hard — and that choice
 is itself part of the story (see *Modeling honesty* below).
 
 **Author:** Diego Leonardo Alves de Andrade
-**Live dashboard:** _<add Streamlit Cloud link here>_
+
+**Live dashboard:** https://nyc-tip-mlops.streamlit.app/
+
 **Repository:** https://github.com/DiegoTDDD/nyc-tip-mlops
 
 ![Streamlit operations dashboard](docs/screenshots/dashboard_model.png)
