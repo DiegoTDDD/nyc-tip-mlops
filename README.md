@@ -92,6 +92,7 @@ honest 0.62 with a clean pipeline is worth more than a leaky 0.99.
 | `trip_distance` | miles |
 | `trip_duration_min` | from pickup/dropoff timestamps |
 | `avg_speed_mph` | distance / duration, capped at 80 |
+| `passenger_count` | riders in the trip |
 | `pickup_dayofweek`, `is_weekend` | calendar features |
 | `hour_sin`, `hour_cos` | cyclical encoding of pickup hour |
 | `pu_zone_tip_rate`, `do_zone_tip_rate` | smoothed target-encoding of zones, **fit on the training split only** to avoid leakage |
@@ -123,7 +124,7 @@ combination logged as a nested child run so they can be compared side by side.
 ## Results
 
 - **Champion:** `nyc_tip_classifier` v2 (XGBoost), promoted automatically.
-- **Validation:** AUC ≈ 0.624, precision ≈ 0.813, recall ≈ 0.620, F1 ≈ 0.704.
+- **Validation:** AUC ≈ 0.6239, precision ≈ 0.8134, recall ≈ 0.6204, F1 ≈ 0.7039.
 - **Drift:** between 2024 and 2025 the model's input features were stable,
   but the **payment-type mix drifted** (the "unknown" share roughly tripled,
   4% → 13%) — a real population shift the monitoring layer flags while
@@ -182,7 +183,7 @@ otherwise.
 ## Tech stack
 
 Python 3.11 · pandas · scikit-learn · XGBoost · **MLflow** (tracking +
-registry) · **Feast** · **Evidently** · **FastAPI** + Uvicorn · **Docker
+registry) · **Evidently** · **FastAPI** + Uvicorn · **Docker
 Compose** · **GitHub Actions** · Streamlit · Plotly.
 
 ---

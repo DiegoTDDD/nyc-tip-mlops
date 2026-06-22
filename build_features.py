@@ -106,7 +106,7 @@ def build(input_path: str, output_path: str) -> None:
     # Fill the few missing passenger_count with the median (1).
     out["passenger_count"] = out["passenger_count"].fillna(1).astype(int)
 
-    # A stable row id + the pickup timestamp will be needed by Feast later.
+    # A stable row id keeps each engineered row traceable to its source trip.
     out = out.reset_index(drop=True)
     out["trip_id"] = out.index.astype(int)
 
