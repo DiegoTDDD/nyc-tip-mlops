@@ -27,3 +27,8 @@ Thumbs.db
 
 # ---- Misc ---------------------------------------------------------------
 *.log
+
+# Segredos: nunca versionar
+.env
+.env.*
+!.env.example

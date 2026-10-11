@@ -19,7 +19,7 @@ services:
     working_dir: /app
     command: ["bash", "-lc", "pip install --no-cache-dir mlflow==3.13.0 && mlflow server --backend-store-uri sqlite:////app/mlflow.db --host 0.0.0.0 --port 5000 --allowed-hosts '*' --no-serve-artifacts"]
     ports:
-      - "5000:5000"
+      - "127.0.0.1:5000:5000"
     volumes:
       - ./:/app
 
@@ -28,7 +28,7 @@ services:
       context: .
       dockerfile: Dockerfile.api
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     environment:
       MLFLOW_TRACKING_URI: sqlite:////app/mlflow.db
     volumes:
