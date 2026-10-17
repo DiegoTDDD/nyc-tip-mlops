@@ -300,6 +300,8 @@ docker compose up --build
 # MLflow UI: http://localhost:5000
 ```
 
+> **Upgrading from MLflow 3.13?** MLflow 3.15 upgrades the SQLite registry (`mlflow.db`) automatically the first time it opens it, and older MLflow versions refuse to open an upgraded database (`Detected out-of-date database schema`). Back up `mlflow.db`, then update every environment together: `pip install -r requirements.txt` and `docker compose up --build`.
+
 ---
 
 ## CI/CD
