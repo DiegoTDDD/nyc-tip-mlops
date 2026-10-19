@@ -103,6 +103,46 @@ _state = {"model": None, "version": None, "pu_map": {}, "do_map": {},
           "pu_prior": 0.5, "do_prior": 0.5}
 
 
+MLRUNS_DIR = os.environ.get("MLRUNS_DIR", "mlruns")
+
+
+def _to_local(uri: str):
+    """Map an artifact location stored in mlflow.db to this machine.
+
+    MLflow stores ABSOLUTE paths (for example /home/runner/work/x/mlruns/1/...
+    or C:/Users/me/x/mlruns/1/...). Inside a container the same files live
+    under MLRUNS_DIR, so when the stored path does not exist we re-root it
+    on the part after "mlruns/". Returns None if nothing matches.
+    """
+    path = uri.replace("file://", "", 1) if uri.startswith("file://") else uri
+    path = path.replace("\\", "/")
+    if len(path) > 2 and path[0] == "/" and path[2] == ":":  # /C:/... from file:///C:/...
+        path = path[1:]
+    if os.path.exists(path):
+        return path
+    marker = "/mlruns/"
+    i = path.rfind(marker)
+    if i == -1:
+        return None
+    candidate = os.path.join(MLRUNS_DIR, path[i + len(marker):])
+    return candidate if os.path.exists(candidate) else None
+
+
+def _load_from_local_mlruns(client: MlflowClient, mv):
+    """Fallback used when the paths stored in mlflow.db do not exist here."""
+    source = mv.source
+    if source.startswith("models:/m-"):
+        source = client.get_logged_model(source.split("/")[-1]).artifact_location
+    model_dir = _to_local(source)
+    run_dir = _to_local(client.get_run(mv.run_id).info.artifact_uri)
+    if model_dir is None or run_dir is None:
+        raise RuntimeError(
+            f"model artifacts not found under {MLRUNS_DIR!r} "
+            f"(registry points at {mv.source!r})")
+    return (mlflow.pyfunc.load_model(model_dir),
+            os.path.join(run_dir, "zone_encodings.json"))
+
+
 def _load_model() -> None:
     """Load the champion model + its zone encodings from MLflow."""
     mlflow.set_tracking_uri(TRACKING_URI)
@@ -110,12 +150,18 @@ def _load_model() -> None:
 
     mv = client.get_model_version_by_alias(REGISTERED_MODEL_NAME, CHAMPION_ALIAS)
     model_uri = f"models:/{REGISTERED_MODEL_NAME}@{CHAMPION_ALIAS}"
-    _state["model"] = mlflow.pyfunc.load_model(model_uri)
+    try:
+        model = mlflow.pyfunc.load_model(model_uri)
+        # The trainer logged zone_encodings.json as a run artifact.
+        enc_path = client.download_artifacts(mv.run_id, "zone_encodings.json")
+    except Exception as first_error:
+        print(f"Registry paths not usable here ({first_error}); "
+              f"falling back to {MLRUNS_DIR}/")
+        model, enc_path = _load_from_local_mlruns(client, mv)
+    _state["model"] = model
     _state["version"] = mv.version
 
-    # The trainer logged zone_encodings.json as a run artifact.
-    local_dir = client.download_artifacts(mv.run_id, "zone_encodings.json")
-    with open(local_dir) as f:
+    with open(enc_path) as f:
         enc = json.load(f)
     # JSON keys are strings; convert back to int zone ids.
     _state["pu_map"] = {int(k): v for k, v in enc["pu_zone_tip_rate"].items()}
