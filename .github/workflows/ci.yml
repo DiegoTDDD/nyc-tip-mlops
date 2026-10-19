@@ -87,6 +87,66 @@ jobs:
             | tee predict.json
           python -c "import json; d=json.load(open('predict.json')); assert 0 <= d['high_tip_probability'] <= 1"
 
+  docker:
+    name: Docker compose stack
+    # Proves the containers really work: the API container must load the
+    # champion model even though mlflow.db was written on the host (absolute
+    # host paths) and is mounted at /app in the container.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Train a sample model on the host
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          python tests/make_sample_data.py
+          python training/train_v2.py --sample 0
+
+      - name: Start the stack
+        run: docker compose up -d --build
+
+      - name: Wait for the API and the MLflow UI
+        run: |
+          for i in $(seq 1 100); do
+            if curl -sf http://127.0.0.1:8000/health >/dev/null && curl -sf http://127.0.0.1:5000/health >/dev/null; then
+              echo "both services are up"; exit 0
+            fi
+            sleep 5
+          done
+          echo "services did not come up in time"
+          docker compose ps
+          docker compose logs --tail 80
+          exit 1
+
+      - name: Call the API
+        run: |
+          curl -sf http://127.0.0.1:8000/health
+          curl -sf -X POST http://127.0.0.1:8000/predict \
+            -H 'content-type: application/json' \
+            -d '{"trip_distance":3.2,"pickup_datetime":"2026-03-04T18:10:00","dropoff_datetime":"2026-03-04T18:32:00","pu_location_id":161,"do_location_id":237,"passenger_count":1}' \
+            | tee predict.json
+          python -c "import json; d=json.load(open('predict.json')); assert 0 <= d['high_tip_probability'] <= 1"
+
+      - name: Ports are bound to localhost only
+        run: |
+          docker compose port api 8000 | tee /dev/stderr | grep -q '^127\.0\.0\.1:'
+          docker compose port mlflow-ui 5000 | tee /dev/stderr | grep -q '^127\.0\.0\.1:'
+
+      - name: Show logs on failure
+        if: failure()
+        run: docker compose logs --tail 120
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v
+
   keepalive:
     name: Keep scheduled workflow enabled
     # GitHub disables scheduled workflows after 60 days without repository
