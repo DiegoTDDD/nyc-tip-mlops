@@ -44,6 +44,65 @@ jobs:
       - name: Run unit tests
         run: pytest tests/test_features.py -v
 
+  pinned:
+    name: Pinned dependencies + API smoke test
+    # Installs EXACTLY requirements.txt (the versions the project documents),
+    # checks for conflicts, runs the tests, trains on the sample data and
+    # calls the real API. This is what proves a dependency bump (for example
+    # MLflow) still works.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install pinned requirements
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip check
+
+      - name: Run unit tests
+        run: pytest tests/test_features.py -v
+
+      - name: Train on sample data
+        run: |
+          python tests/make_sample_data.py
+          python training/train_v2.py --sample 0
+
+      - name: Start API and call /health and /predict
+        run: |
+          python -m uvicorn serving.app_api:app --port 8000 > api.log 2>&1 &
+          for i in $(seq 1 40); do
+            if curl -sf http://127.0.0.1:8000/health; then break; fi
+            sleep 3
+          done
+          curl -sf http://127.0.0.1:8000/health || { cat api.log; exit 1; }
+          curl -sf -X POST http://127.0.0.1:8000/predict \
+            -H 'content-type: application/json' \
+            -d '{"trip_distance":3.2,"pickup_datetime":"2026-03-04T18:10:00","dropoff_datetime":"2026-03-04T18:32:00","pu_location_id":161,"do_location_id":237,"passenger_count":1}' \
+            | tee predict.json
+          python -c "import json; d=json.load(open('predict.json')); assert 0 <= d['high_tip_probability'] <= 1"
+
+  keepalive:
+    name: Keep scheduled workflow enabled
+    # GitHub disables scheduled workflows after 60 days without repository
+    # activity, and a disabled workflow also stops running on push. Re-enabling
+    # the workflow on every scheduled run keeps it alive.
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Re-enable this workflow
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/ci.yml/enable"
+
   retrain:
     name: Scheduled retrain
     runs-on: ubuntu-latest
