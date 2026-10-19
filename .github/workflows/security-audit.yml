@@ -1,0 +1,42 @@
+name: Security audit
+
+# Audits every requirements*.txt in the repository with pip-audit.
+# FAILS only if a vulnerable package has a fixed version available.
+# Advisories with no published fix are printed but accepted on purpose.
+on:
+  push:
+    paths:
+      - "**/requirements*.txt"
+      - ".github/workflows/security-audit.yml"
+      - ".github/scripts/audit_requirements.py"
+  schedule:
+    - cron: "17 7 * * 1"   # every Monday
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write   # only used to keep the weekly schedule enabled (see last step)
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install pip-audit
+        run: pip install pip-audit uv
+
+      - name: Audit requirements
+        run: python .github/scripts/audit_requirements.py
+
+      - name: Keep the weekly schedule enabled
+        if: ${{ always() && github.event_name == 'schedule' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/security-audit.yml/enable"

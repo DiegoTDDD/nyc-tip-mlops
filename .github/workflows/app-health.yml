@@ -1,0 +1,54 @@
+name: App health
+
+# Opens the live Streamlit app in a real browser (waking it if needed) and fails
+# if it shows an error. Runs after every push (giving Streamlit Cloud time to
+# rebuild), every day, and on demand.
+on:
+  push:
+  schedule:
+    - cron: "41 9 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write   # only used to keep the schedule enabled (see last step)
+
+env:
+  APP_URL: https://nyc-tip-mlops.streamlit.app
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Give Streamlit Cloud time to rebuild after a push
+        if: github.event_name == 'push'
+        run: sleep 240
+
+      - name: Quick HTTP check (informational)
+        continue-on-error: true
+        run: |
+          curl -s -o /dev/null -w "page: HTTP %{http_code}\n" -L "$APP_URL"
+          curl -s -w "\nhealth: HTTP %{http_code}\n" -L "$APP_URL/_stcore/health"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install a browser
+        run: |
+          pip install playwright
+          playwright install --with-deps chromium
+
+      - name: Open the app and check it renders
+        run: python .github/scripts/check_app.py
+
+      - name: Keep the schedule enabled
+        if: ${{ always() && github.event_name == 'schedule' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/app-health.yml/enable"
