@@ -32,7 +32,7 @@ is itself part of the story (see *Modeling honesty* below).
 | Model serving | FastAPI service that loads the champion straight from the registry and reproduces the exact training-time feature engineering |
 | Data-drift monitoring | Evidently report comparing 2024 (reference) vs 2025 (current) |
 | Containerization | Docker Compose running the API and the MLflow UI together |
-| CI/CD | GitHub Actions: unit tests on every push, scheduled automated retraining |
+| CI/CD | GitHub Actions: unit tests, an exact-versions install + API test and a Docker Compose test on every push, scheduled automated retraining, a weekly security audit and a live-app health check |
 | Operations dashboard | Streamlit console: champion metrics, registry history, drift status, live prediction |
 
 ---
@@ -57,7 +57,7 @@ NYC Taxi parquet (2024 train / 2025 production)
   Streamlit dashboard  (metrics + registry + drift + live prediction)
 
   Docker Compose: API (8000) + MLflow UI (5000)
-  GitHub Actions: tests on push, scheduled retrain
+  GitHub Actions: tests + Docker test on push, scheduled retrain, security audit, app health
 ```
 
 ---
@@ -206,7 +206,11 @@ nyc-tip-mlops/
 ├── tests/
 │   ├── test_features.py         # unit tests (feature logic, target)
 │   └── make_sample_data.py      # small synthetic sample for CI
-├── .github/workflows/ci.yml     # tests on push + scheduled retrain
+├── .github/
+│   ├── workflows/ci.yml         # tests, exact-versions + API test, Docker test, scheduled retrain
+│   ├── workflows/security-audit.yml  # pip-audit of every requirements file
+│   ├── workflows/app-health.yml # opens the live Streamlit app in a browser
+│   └── scripts/                 # helpers used by the two workflows above
 ├── Dockerfile.api               # API image
 ├── docker-compose.yml           # API + MLflow UI
 ├── requirements.txt             # full project deps
@@ -300,20 +304,47 @@ docker compose up --build
 # MLflow UI: http://localhost:5000
 ```
 
+Both ports are published on `127.0.0.1` only, so the API and the MLflow UI are not
+reachable from other machines on your network.
+
+`mlflow.db` records the absolute path of the folder where the model was trained. That
+folder does not exist inside the container, so when the registered path is missing the
+API loads the same files from `./mlruns` (mounted at `/app/mlruns`). The *Docker compose
+stack* job in CI checks this on every push.
+
 > **Upgrading from MLflow 3.13 – 3.15?** MLflow 3.16 and later fix the AI Gateway SSRF advisory (GHSA-h7x2-h6g9-p789) that affected 3.13.0 – 3.15.2. The newer versions upgrade the SQLite registry (`mlflow.db`) automatically the first time they open it, and older MLflow versions refuse to open an upgraded database (`Detected out-of-date database schema`). Back up `mlflow.db`, then update every environment together: `pip install -r requirements.txt` and `docker compose up --build`.
 
 ---
 
 ## CI/CD
 
-`.github/workflows/ci.yml` defines two jobs:
+`.github/workflows/ci.yml` defines five jobs:
 
 - **test** — runs the unit-test suite on every push and pull request.
+- **pinned** — installs exactly `requirements.txt` (the documented versions), runs
+  `pip check` and the tests, trains on the sample data, starts the API and calls
+  `/health` and `/predict`. This is what proves a dependency bump (for example MLflow)
+  still works.
+- **docker** — trains a sample model on the runner, runs `docker compose up --build`,
+  waits for the API and the MLflow UI, calls `/predict` and checks that the published
+  ports are bound to `127.0.0.1`.
 - **retrain** — on a weekly schedule (and on demand via *Run workflow*),
   regenerates a small synthetic sample, runs the full training + MLflow
   logging + registry-promotion path, and uploads the model artifacts.
   This demonstrates the automated-retraining loop that closes the MLOps
   cycle without depending on the large external dataset.
+- **keepalive** — on the weekly schedule, re-enables the workflow, because GitHub
+  disables scheduled workflows after 60 days without repository activity (and a
+  disabled workflow also stops running on push).
+
+Two more workflows run next to it:
+
+- `security-audit.yml` audits every `requirements*.txt` with `pip-audit` whenever
+  dependencies change and every Monday. It fails only when a vulnerable package has a
+  fixed version available.
+- `app-health.yml` opens the [live dashboard](https://nyc-tip-mlops.streamlit.app) in a
+  real browser after each push and once a day (waking it if it was asleep) and fails if
+  the app shows an error.
 
 ---
 
