@@ -194,6 +194,9 @@ Compose** · **GitHub Actions** · Streamlit · Plotly.
 nyc-tip-mlops/
 ├── build_features.py            # raw parquet -> leakage-free feature table
 ├── build_monitoring_snapshot.py # full-population snapshots for drift
+├── inspect_data.py              # quick look at the raw TLC files (schema, row counts)
+├── export_for_deploy.py         # exports the champion into serving_model/
+├── serving_model/               # versioned champion bundle used by Streamlit Cloud
 ├── training/
 │   ├── train.py                 # baseline trainer
 │   └── train_v2.py              # richer features + hyperparameter search
@@ -202,7 +205,9 @@ nyc-tip-mlops/
 ├── monitoring/
 │   └── check_drift.py           # Evidently drift report + summary JSON
 ├── dashboard/
-│   └── app_dashboard.py         # Streamlit operations console
+│   ├── app_dashboard.py         # Streamlit operations console
+│   └── requirements.txt         # slim deps for Streamlit Cloud
+├── docs/screenshots/            # images used in this README
 ├── tests/
 │   ├── test_features.py         # unit tests (feature logic, target)
 │   └── make_sample_data.py      # small synthetic sample for CI
@@ -313,6 +318,12 @@ API loads the same files from `./mlruns` (mounted at `/app/mlruns`). The *Docker
 stack* job in CI checks this on every push.
 
 > **Upgrading from MLflow 3.13 – 3.15?** MLflow 3.16 and later fix the AI Gateway SSRF advisory (GHSA-h7x2-h6g9-p789) that affected 3.13.0 – 3.15.2. The newer versions upgrade the SQLite registry (`mlflow.db`) automatically the first time they open it, and older MLflow versions refuse to open an upgraded database (`Detected out-of-date database schema`). Back up `mlflow.db`, then update every environment together: `pip install -r requirements.txt` and `docker compose up --build`.
+
+### Run the tests
+
+```bash
+pytest tests/test_features.py
+```
 
 ---
 
