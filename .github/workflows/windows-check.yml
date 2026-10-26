@@ -1,0 +1,92 @@
+name: Windows check
+
+# Runs the README on a real Windows machine, with Git Bash and conda as the README says: conda environment,
+# dependencies, the tests, training with MLflow (SQLite registry) and the API. The sample data replaces the
+# TLC download so the run stays short. Runs when this file changes, every month and on demand.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "53 5 1 * *"
+  push:
+    paths:
+      - ".github/workflows/windows-check.yml"
+
+permissions:
+  contents: read
+  actions: write   # only used to keep the monthly schedule enabled (see last step)
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 50
+    defaults:
+      run:
+        shell: bash -el {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: conda-incubator/setup-miniconda@v3
+        with:
+          auto-activate-base: false
+
+      - name: "README step 1: conda create -n mlops python=3.11 and the folders"
+        run: |
+          conda create -n mlops python=3.11 -y
+          conda activate mlops
+          mkdir -p data features monitoring
+
+      - name: "README step 2: pip install -r requirements.txt"
+        run: |
+          conda activate mlops
+          pip install -r requirements.txt
+          pip check
+
+      - name: "README, tests: pytest tests/test_features.py"
+        run: |
+          conda activate mlops
+          pytest tests/test_features.py
+
+      - name: "README step 4 (sample data): train and register the champion with MLflow"
+        run: |
+          conda activate mlops
+          python tests/make_sample_data.py
+          python training/train_v2.py --sample 0
+          ls -la mlflow.db
+
+      - name: "README step 5: uvicorn serving.app_api:app serves /health and /predict"
+        run: |
+          conda activate mlops
+          nohup python -m uvicorn serving.app_api:app --port 8000 > api.log 2>&1 &
+          for i in $(seq 1 60); do
+            if curl -sf http://127.0.0.1:8000/health >/dev/null; then break; fi
+            sleep 2
+          done
+          curl -sf http://127.0.0.1:8000/health
+          echo
+          curl -sf -X POST http://127.0.0.1:8000/predict -H 'content-type: application/json' \
+            -d '{"trip_distance":3.2,"pickup_datetime":"2026-03-04T18:10:00","dropoff_datetime":"2026-03-04T18:32:00","pu_location_id":161,"do_location_id":237,"passenger_count":1}' | tee predict.json
+          python -c "import json; d=json.load(open('predict.json')); assert 0 <= d['high_tip_probability'] <= 1"
+
+      - name: "README step 7: the dashboard starts"
+        run: |
+          conda activate mlops
+          nohup python -m streamlit run dashboard/app_dashboard.py --server.headless true --server.port 8501 > dashboard.log 2>&1 &
+          for i in $(seq 1 45); do
+            if curl -sf http://127.0.0.1:8501/_stcore/health >/dev/null; then echo "dashboard is up"; exit 0; fi
+            sleep 2
+          done
+          tail -30 dashboard.log
+          exit 1
+
+      - name: Show the logs on failure
+        if: failure()
+        run: |
+          tail -40 api.log || true
+          tail -30 dashboard.log || true
+
+      - name: Keep the monthly schedule enabled
+        if: ${{ always() && github.event_name == 'schedule' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/windows-check.yml/enable"
