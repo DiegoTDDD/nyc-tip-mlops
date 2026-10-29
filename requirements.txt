@@ -13,7 +13,7 @@ scikit-learn==1.9.0
 xgboost==3.2.0
 
 # --- MLOps platform ---
-mlflow==3.17.1
+mlflow==3.17.2
 evidently==0.7.21
 
 # --- Serving ---
@@ -22,7 +22,7 @@ uvicorn==0.34.0
 pydantic==2.13.4
 
 # --- Dashboard ---
-streamlit==1.60.0
+streamlit==1.66.1
 plotly==5.24.1
 
 # --- Plotting (training diagnostics) ---

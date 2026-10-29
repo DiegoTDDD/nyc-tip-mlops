@@ -17,7 +17,7 @@ services:
   mlflow-ui:
     image: python:3.11-slim
     working_dir: /app
-    command: ["bash", "-lc", "pip install --no-cache-dir mlflow==3.17.1 && mlflow server --backend-store-uri sqlite:////app/mlflow.db --host 0.0.0.0 --port 5000 --allowed-hosts '*' --no-serve-artifacts"]
+    command: ["bash", "-lc", "pip install --no-cache-dir mlflow==3.17.2 && mlflow server --backend-store-uri sqlite:////app/mlflow.db --host 0.0.0.0 --port 5000 --allowed-hosts '*' --no-serve-artifacts"]
     ports:
       - "127.0.0.1:5000:5000"
     volumes:
