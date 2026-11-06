@@ -50,11 +50,14 @@ with sync_playwright() as p:
     last = ""
     while time.time() < DEADLINE:
         try:
-            wake = page.get_by_text(re.compile(r"get this app back up", re.I))
-            if wake.count() and not woke:
-                print("app was asleep - waking it up")
-                wake.first.click()
-                woke = True
+            if not woke:
+                for fr in page.frames:
+                    wake = fr.get_by_text(re.compile(r"get this app back up|wake (it|this app)", re.I))
+                    if wake.count():
+                        print(f"app was asleep - waking it up (frame {fr.url[:60]})")
+                        wake.first.click()
+                        woke = True
+                        break
             frame = app_frame(page)
             if frame is not None:
                 text = frame.locator("body").inner_text(timeout=15000)
@@ -67,7 +70,26 @@ with sync_playwright() as p:
             last = f"(poll error: {e})"[:300]
         time.sleep(5)
     else:
-        fail(f"app did not load within 10 minutes. Page says: {last}")
+        info = []
+        try:
+            info.append(f"url={page.url[:120]}")
+            info.append(f"title={page.title()[:80]!r}")
+            for fr in page.frames[:4]:
+                try:
+                    txt = fr.locator("body").inner_text(timeout=3000)[:160].replace("\n", " | ")
+                except Exception as e:
+                    txt = f"(no text: {str(e)[:40]})"
+                info.append(f"frame[{fr.url[:70]}]: {txt!r}")
+            btn = []
+            for fr in page.frames[:4]:
+                try:
+                    btn += [b.inner_text(timeout=1000)[:40] for b in fr.get_by_role("button").all()[:6]]
+                except Exception:
+                    pass
+            info.append(f"buttons={btn}")
+        except Exception as e:
+            info.append(f"(diagnostics failed: {e})")
+        fail(f"app did not load within 10 minutes. Page says: {last} || " + " || ".join(info))
 
     time.sleep(25)  # let the first script run finish
     frame = app_frame(page) or frame
