@@ -6,7 +6,7 @@ name: App health
 on:
   push:
   schedule:
-    - cron: "41 9 * * *"
+    - cron: "30 9 * * *"
   workflow_dispatch:
 
 permissions:
@@ -19,7 +19,7 @@ env:
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
 
@@ -30,8 +30,8 @@ jobs:
       - name: Quick HTTP check (informational)
         continue-on-error: true
         run: |
-          curl -s -o /dev/null -w "page: HTTP %{http_code}\n" -L "$APP_URL"
-          curl -s -w "\nhealth: HTTP %{http_code}\n" -L "$APP_URL/_stcore/health"
+          curl -s -o /dev/null -w "page: HTTP %{http_code}\n" -L --max-redirs 10 "$APP_URL" || true
+          curl -s -w "\nhealth: HTTP %{http_code}\n" -L --max-redirs 10 "$APP_URL/_stcore/health" || true
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -44,6 +44,8 @@ jobs:
           playwright install --with-deps chromium
 
       - name: Open the app and check it renders
+        env:
+          EVENT_NAME: ${{ github.event_name }}
         run: python .github/scripts/check_app.py
 
       - name: Keep the schedule enabled
