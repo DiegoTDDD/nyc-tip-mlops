@@ -12,13 +12,18 @@ credit-card filter. check_drift.py compares these two snapshots.
 
 Usage
 -----
-    python build_monitoring_snapshot.py data/yellow_tripdata_2024-01.parquet monitoring/ref_snapshot.parquet
-    python build_monitoring_snapshot.py data/yellow_tripdata_2025-01.parquet monitoring/cur_snapshot.parquet
+    python build_monitoring_snapshot.py data/yellow_tripdata_2024-01.parquet \
+        monitoring/ref_snapshot.parquet
+    python build_monitoring_snapshot.py data/yellow_tripdata_2025-01.parquet \
+        monitoring/cur_snapshot.parquet
 """
 
+import logging
 import sys
+
 import pandas as pd
-import numpy as np
+
+log = logging.getLogger(__name__)
 
 MONITOR_COLS = [
     "trip_distance",
@@ -33,9 +38,9 @@ MONITOR_COLS = [
 
 
 def build(input_path: str, output_path: str) -> None:
-    print(f"Reading {input_path} ...")
+    log.info(f"Reading {input_path} ...")
     df = pd.read_parquet(input_path)
-    print(f"  raw rows: {len(df):,}")
+    log.info(f"  raw rows: {len(df):,}")
 
     # Keep positive fares only; do NOT filter by payment type (we want the
     # full population so payment_type drift is visible).
@@ -63,13 +68,13 @@ def build(input_path: str, output_path: str) -> None:
         out = out.sample(n=300_000, random_state=42).reset_index(drop=True)
 
     out.to_parquet(output_path, index=False)
-    print(f"Saved {len(out):,} rows -> {output_path}")
-    print("payment_type distribution:")
-    print(out["payment_type"].value_counts(normalize=True).round(3).to_string())
+    log.info(f"Saved {len(out):,} rows -> {output_path}")
+    log.info("payment_type distribution:")
+    log.info(out["payment_type"].value_counts(normalize=True).round(3).to_string())
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
     if len(sys.argv) != 3:
-        print("Usage: python build_monitoring_snapshot.py <input> <output>")
-        sys.exit(1)
+        sys.exit("Usage: python build_monitoring_snapshot.py <input> <output>")
     build(sys.argv[1], sys.argv[2])

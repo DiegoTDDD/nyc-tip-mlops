@@ -1,0 +1,31 @@
+[project]
+name = "nyc-tip-mlops"
+version = "1.1.0"
+description = "End-to-end MLOps for a NYC taxi high-tip classifier: MLflow registry, FastAPI, drift monitoring"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Diego Alves" }]
+# Pinned dependencies: requirements.txt (everything), requirements-api.txt (API image),
+# dashboard/requirements.txt (Streamlit Cloud).
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+filterwarnings = ["ignore::DeprecationWarning", "ignore::UserWarning", "ignore::FutureWarning"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = [".github"]
+
+[tool.ruff.lint]
+# ANN: type hints on every function in nyc_tip/, training/, serving/ and monitoring/.
+# T20: no print() there; progress goes through logging.
+select = ["E", "F", "I", "B", "UP", "ANN", "T20"]
+ignore = ["E402", "ANN401"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["ANN", "T20"]
+"dashboard/**" = ["ANN", "T20", "E501"]
+"inspect_data.py" = ["ANN", "T20"]

@@ -1,17 +1,18 @@
-"""Versioned training for the NYC Taxi high-tip classifier.
+"""Baseline trainer for the NYC Taxi high-tip classifier.
 
-Trains an XGBoost classifier on the leakage-free feature table, logs
-everything to MLflow (params, metrics, the model artifact, and a few
-diagnostic plots), and registers the model in the MLflow Model Registry
-under a fixed name. If the new run beats the model currently in the
-"champion" alias on validation AUC, it is promoted automatically.
+Trains a single XGBoost model on the raw feature table (zone ids as plain
+numbers, no engineered features) and logs it to MLflow with its metrics and
+diagnostic plots, as the reference point for training/train_v2.py.
+
+It does NOT register the model: its inputs differ from the features the API
+builds (nyc_tip/features.py), so it must never become the champion the API
+serves. Registration and promotion happen only in train_v2.py (ADR 0002).
 
 Backend
 -------
 Tracking + registry are stored locally in a SQLite file (mlflow.db) with
 artifacts under ./mlruns. This keeps the project self-contained (no
-server, no cloud) while still enabling the Model Registry, which requires
-a database backend.
+server, no cloud) while keeping the same store as train_v2.py.
 
 Usage
 -----
@@ -20,35 +21,34 @@ Usage
 """
 
 import argparse
+import logging
 import os
 import tempfile
 
 import matplotlib
+
 matplotlib.use("Agg")  # headless backend, no display needed
 import matplotlib.pyplot as plt
-
-import numpy as np
-import pandas as pd
 import mlflow
 import mlflow.xgboost
-from mlflow.tracking import MlflowClient
-from sklearn.model_selection import train_test_split
+import numpy as np
+import pandas as pd
 from sklearn.metrics import (
-    roc_auc_score,
     accuracy_score,
+    confusion_matrix,
+    f1_score,
     precision_score,
     recall_score,
-    f1_score,
-    confusion_matrix,
+    roc_auc_score,
     roc_curve,
 )
+from sklearn.model_selection import train_test_split
 from xgboost import XGBClassifier
 
+log = logging.getLogger(__name__)
 
-# Fixed names so every part of the project (API, dashboard, CI) agrees.
-EXPERIMENT_NAME = "nyc_tip_classification"
-REGISTERED_MODEL_NAME = "nyc_tip_classifier"
-CHAMPION_ALIAS = "champion"
+
+EXPERIMENT_NAME = "nyc_tip_classification"  # same experiment as train_v2.py, for comparison
 
 FEATURES = [
     "trip_distance",
@@ -63,17 +63,8 @@ FEATURES = [
 TARGET = "high_tip"
 
 
-def get_champion_auc(client: MlflowClient) -> float:
-    """Return the validation AUC of the current champion, or -1 if none."""
-    try:
-        mv = client.get_model_version_by_alias(REGISTERED_MODEL_NAME, CHAMPION_ALIAS)
-    except Exception:
-        return -1.0
-    run = client.get_run(mv.run_id)
-    return float(run.data.metrics.get("val_auc", -1.0))
-
-
 def main() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
     parser = argparse.ArgumentParser()
     parser.add_argument("--data", default="features/train.parquet")
     parser.add_argument("--n-estimators", type=int, default=300)
@@ -86,14 +77,13 @@ def main() -> None:
     # --- Tracking backend: local SQLite + ./mlruns artifacts -------------
     mlflow.set_tracking_uri("sqlite:///mlflow.db")
     mlflow.set_experiment(EXPERIMENT_NAME)
-    client = MlflowClient()
 
     # --- Load data --------------------------------------------------------
-    print(f"Loading {args.data} ...")
+    log.info(f"Loading {args.data} ...")
     df = pd.read_parquet(args.data, columns=FEATURES + [TARGET])
     if args.sample and len(df) > args.sample:
         df = df.sample(n=args.sample, random_state=42).reset_index(drop=True)
-        print(f"  sampled down to {len(df):,} rows for training speed")
+        log.info(f"  sampled down to {len(df):,} rows for training speed")
 
     X = df[FEATURES]
     y = df[TARGET]
@@ -101,7 +91,7 @@ def main() -> None:
     X_train, X_val, y_train, y_val = train_test_split(
         X, y, test_size=0.2, random_state=42, stratify=y
     )
-    print(f"  train: {len(X_train):,}   val: {len(X_val):,}")
+    log.info(f"  train: {len(X_train):,}   val: {len(X_val):,}")
 
     # --- Class imbalance handling ----------------------------------------
     pos = float((y_train == 1).sum())
@@ -125,7 +115,7 @@ def main() -> None:
         mlflow.log_param("n_features", len(FEATURES))
         mlflow.log_param("train_rows", len(X_train))
 
-        print("Training XGBoost ...")
+        log.info("Training XGBoost ...")
         model = XGBClassifier(**params)
         model.fit(X_train, y_train)
 
@@ -141,9 +131,9 @@ def main() -> None:
             "val_f1": f1_score(y_val, pred),
         }
         mlflow.log_metrics(metrics)
-        print("Validation metrics:")
+        log.info("Validation metrics:")
         for k, v in metrics.items():
-            print(f"  {k}: {v:.4f}")
+            log.info(f"  {k}: {v:.4f}")
 
         # --- Diagnostic plots --------------------------------------------
         tmpdir = tempfile.mkdtemp()
@@ -193,37 +183,17 @@ def main() -> None:
         plt.close()
         mlflow.log_artifact(fi_path)
 
-        # --- Log + register the model ------------------------------------
-        signature = mlflow.models.infer_signature(X_val, proba)
+        # --- Log the model, without registering it ----------------------
+        # The baseline uses raw zone ids, not the API's features (nyc_tip/features.py),
+        # so it must never become the champion the API loads. It is logged only to
+        # compare against train_v2.py in the MLflow UI (ADR 0002).
         mlflow.xgboost.log_model(
-            model,
-            name="model",
-            signature=signature,
-            registered_model_name=REGISTERED_MODEL_NAME,
+            model, name="model", signature=mlflow.models.infer_signature(X_val, proba)
         )
+        mlflow.set_tag("role", "baseline (not registered)")
 
-        # The freshly registered version is the latest one.
-        new_version = client.get_latest_versions(REGISTERED_MODEL_NAME)[0]
-
-        # --- Promote if it beats the current champion --------------------
-        champ_auc = get_champion_auc(client)
-        if metrics["val_auc"] > champ_auc:
-            client.set_registered_model_alias(
-                REGISTERED_MODEL_NAME, CHAMPION_ALIAS, new_version.version
-            )
-            print(
-                f"\nPromoted version {new_version.version} to '{CHAMPION_ALIAS}' "
-                f"(val_auc {metrics['val_auc']:.4f} > previous {champ_auc:.4f})."
-            )
-        else:
-            print(
-                f"\nKept existing champion (val_auc {champ_auc:.4f} >= "
-                f"new {metrics['val_auc']:.4f}). New version {new_version.version} "
-                "registered but not promoted."
-            )
-
-        print(f"\nRun complete. Run ID: {run.info.run_id}")
-        print("View the UI with:  mlflow ui --backend-store-uri sqlite:///mlflow.db")
+        log.info(f"Run complete. Run ID: {run.info.run_id}")
+        log.info("View the UI with:  mlflow ui --backend-store-uri sqlite:///mlflow.db")
 
 
 if __name__ == "__main__":

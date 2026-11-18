@@ -21,19 +21,27 @@ Run locally
 
 from __future__ import annotations
 
-import json
+import logging
 import os
+import sys
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import datetime
-from typing import Optional
+from pathlib import Path
+from typing import Any
 
-import numpy as np
-import pandas as pd
 import mlflow
-import mlflow.pyfunc
-from mlflow.tracking import MlflowClient
+import mlflow.xgboost
+import pandas as pd
 from fastapi import FastAPI, HTTPException
+from mlflow.entities.model_registry import ModelVersion
+from mlflow.tracking import MlflowClient
 from pydantic import BaseModel, Field
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from nyc_tip.features import ZoneEncodings, trip_features  # noqa: E402
+
+log = logging.getLogger(__name__)
 
 # --- Config -----------------------------------------------------------------
 # The tracking URI must match the trainer's. Allow override via env var so
@@ -41,36 +49,7 @@ from pydantic import BaseModel, Field
 TRACKING_URI = os.environ.get("MLFLOW_TRACKING_URI", "sqlite:///mlflow.db")
 REGISTERED_MODEL_NAME = "nyc_tip_classifier"
 CHAMPION_ALIAS = "champion"
-
-MODEL_FEATURES = [
-    "trip_distance",
-    "trip_duration_min",
-    "avg_speed_mph",
-    "pickup_dayofweek",
-    "is_weekend",
-    "passenger_count",
-    "hour_sin",
-    "hour_cos",
-    "pu_zone_tip_rate",
-    "do_zone_tip_rate",
-]
-
-# Exact dtypes the model's MLflow signature requires. Must match what the
-# training DataFrame produced, or strict schema enforcement rejects the
-# request. pickup_dayofweek was int32 in training (MLflow "integer");
-# is_weekend / passenger_count were int64 ("long"); the rest are float64.
-FEATURE_DTYPES = {
-    "trip_distance": "float64",
-    "trip_duration_min": "float64",
-    "avg_speed_mph": "float64",
-    "pickup_dayofweek": "int32",
-    "is_weekend": "int64",
-    "passenger_count": "int64",
-    "hour_sin": "float64",
-    "hour_cos": "float64",
-    "pu_zone_tip_rate": "float64",
-    "do_zone_tip_rate": "float64",
-}
+THRESHOLD = 0.5
 
 
 # --- Request / response schemas --------------------------------------------
@@ -90,23 +69,15 @@ class Prediction(BaseModel):
     model_version: str
 
 
-# --- App + model loading ----------------------------------------------------
-app = FastAPI(
-    title="NYC Taxi High-Tip Classifier",
-    description="Predicts whether a taxi trip will yield a tip above 20% "
-                "of the fare. Model served from the MLflow Model Registry.",
-    version="1.0.0",
-)
-
-# Filled in at startup.
-_state = {"model": None, "version": None, "pu_map": {}, "do_map": {},
-          "pu_prior": 0.5, "do_prior": 0.5}
+# --- Model state ------------------------------------------------------------
+# Filled at startup by load_model(); tests can set it directly.
+_state: dict[str, Any] = {"model": None, "version": None, "encodings": ZoneEncodings()}
 
 
 MLRUNS_DIR = os.environ.get("MLRUNS_DIR", "mlruns")
 
 
-def _to_local(uri: str):
+def _to_local(uri: str) -> str | None:
     """Map an artifact location stored in mlflow.db to this machine.
 
     MLflow stores ABSOLUTE paths (for example /home/runner/work/x/mlruns/1/...
@@ -128,7 +99,7 @@ def _to_local(uri: str):
     return candidate if os.path.exists(candidate) else None
 
 
-def _load_from_local_mlruns(client: MlflowClient, mv):
+def _load_from_local_mlruns(client: MlflowClient, mv: ModelVersion) -> tuple[Any, str]:
     """Fallback used when the paths stored in mlflow.db do not exist here."""
     source = mv.source
     if source.startswith("models:/m-"):
@@ -139,7 +110,7 @@ def _load_from_local_mlruns(client: MlflowClient, mv):
         raise RuntimeError(
             f"model artifacts not found under {MLRUNS_DIR!r} "
             f"(registry points at {mv.source!r})")
-    return (mlflow.pyfunc.load_model(model_dir),
+    return (mlflow.xgboost.load_model(model_dir),
             os.path.join(run_dir, "zone_encodings.json"))
 
 
@@ -151,66 +122,55 @@ def _load_model() -> None:
     mv = client.get_model_version_by_alias(REGISTERED_MODEL_NAME, CHAMPION_ALIAS)
     model_uri = f"models:/{REGISTERED_MODEL_NAME}@{CHAMPION_ALIAS}"
     try:
-        model = mlflow.pyfunc.load_model(model_uri)
+        # The native XGBoost model, not the pyfunc wrapper: pyfunc.predict() returns
+        # the class (0/1), and the API reports a probability (ADR 0003).
+        model = mlflow.xgboost.load_model(model_uri)
         # The trainer logged zone_encodings.json as a run artifact.
         enc_path = client.download_artifacts(mv.run_id, "zone_encodings.json")
     except Exception as first_error:
-        print(f"Registry paths not usable here ({first_error}); "
-              f"falling back to {MLRUNS_DIR}/")
+        log.warning("Registry paths not usable here (%s); falling back to %s/",
+                    first_error, MLRUNS_DIR)
         model, enc_path = _load_from_local_mlruns(client, mv)
     _state["model"] = model
-    _state["version"] = mv.version
-
-    with open(enc_path) as f:
-        enc = json.load(f)
-    # JSON keys are strings; convert back to int zone ids.
-    _state["pu_map"] = {int(k): v for k, v in enc["pu_zone_tip_rate"].items()}
-    _state["do_map"] = {int(k): v for k, v in enc["do_zone_tip_rate"].items()}
-    _state["pu_prior"] = enc["pu_prior"]
-    _state["do_prior"] = enc["do_prior"]
+    _state["version"] = str(mv.version)  # MLflow 3 returns an int; the API always reports a string
+    _state["encodings"] = ZoneEncodings.load(enc_path)
 
 
-@app.on_event("startup")
-def startup() -> None:
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Load the champion once at startup. A failure leaves the API up but /health returns 503."""
     try:
         _load_model()
-        print(f"Loaded champion model version {_state['version']}")
-    except Exception as e:  # don't crash; /health will report unready
-        print(f"WARNING: could not load model at startup: {e}")
+        log.info("Loaded champion model version %s", _state["version"])
+    except Exception as exc:  # noqa: BLE001 - keep serving /health so the failure is visible
+        log.warning("could not load model at startup: %s", exc)
+    yield
+
+
+app = FastAPI(
+    title="NYC Taxi High-Tip Classifier",
+    description="Predicts whether a taxi trip will yield a tip above 20% "
+    "of the fare. Model served from the MLflow Model Registry.",
+    version="1.1.0",
+    lifespan=lifespan,
+)
 
 
 def _engineer(trip: Trip) -> pd.DataFrame:
-    """Turn a raw trip into the exact model feature row used in training."""
-    duration_min = (trip.dropoff_datetime - trip.pickup_datetime).total_seconds() / 60.0
-    if duration_min <= 0:
-        raise HTTPException(status_code=422,
-                            detail="dropoff must be after pickup")
+    """Raw trip -> the exact feature row used in training (nyc_tip/features.py)."""
+    try:
+        return trip_features(
+            trip.trip_distance, trip.pickup_datetime, trip.dropoff_datetime,
+            trip.pu_location_id, trip.do_location_id, trip.passenger_count,
+            _state["encodings"],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    hours = max(duration_min / 60.0, 1e-3)
-    avg_speed = min(trip.trip_distance / hours, 80.0)
-    hour = trip.pickup_datetime.hour
-    dow = trip.pickup_datetime.weekday()
 
-    row = {
-        "trip_distance": trip.trip_distance,
-        "trip_duration_min": duration_min,
-        "avg_speed_mph": avg_speed,
-        "pickup_dayofweek": dow,
-        "is_weekend": 1 if dow >= 5 else 0,
-        "passenger_count": trip.passenger_count,
-        "hour_sin": np.sin(2 * np.pi * hour / 24.0),
-        "hour_cos": np.cos(2 * np.pi * hour / 24.0),
-        "pu_zone_tip_rate": _state["pu_map"].get(trip.pu_location_id, _state["pu_prior"]),
-        "do_zone_tip_rate": _state["do_map"].get(trip.do_location_id, _state["do_prior"]),
-    }
-    df = pd.DataFrame([row])[MODEL_FEATURES]
-
-    # Cast each column to the exact dtype the model's MLflow signature
-    # expects. The training data produced pickup_dayofweek as int32, while
-    # building a DataFrame from a Python dict defaults to int64; MLflow's
-    # strict schema enforcement refuses the silent int64->int32 conversion.
-    df = df.astype(FEATURE_DTYPES)
-    return df
+def _require_model() -> None:
+    if _state["model"] is None:
+        raise HTTPException(status_code=503, detail="model not loaded")
 
 
 @app.get("/")
@@ -226,33 +186,29 @@ def root() -> dict:
 
 @app.get("/health")
 def health() -> dict:
-    if _state["model"] is None:
-        raise HTTPException(status_code=503, detail="model not loaded")
+    _require_model()
     return {"status": "healthy", "model_version": _state["version"]}
 
 
 @app.post("/predict", response_model=Prediction)
 def predict(trip: Trip) -> Prediction:
-    if _state["model"] is None:
-        raise HTTPException(status_code=503, detail="model not loaded")
-    X = _engineer(trip)
-    proba = float(np.asarray(_state["model"].predict(X)).ravel()[0])
+    _require_model()
+    proba = float(_state["model"].predict_proba(_engineer(trip))[0, 1])
     return Prediction(
         high_tip_probability=round(proba, 4),
-        high_tip=proba >= 0.5,
+        high_tip=proba >= THRESHOLD,
         model_version=str(_state["version"]),
     )
 
 
 @app.post("/predict/batch")
 def predict_batch(trips: list[Trip]) -> list[Prediction]:
-    if _state["model"] is None:
-        raise HTTPException(status_code=503, detail="model not loaded")
+    _require_model()
     rows = pd.concat([_engineer(t) for t in trips], ignore_index=True)
-    probas = np.asarray(_state["model"].predict(rows)).ravel()
+    probas = _state["model"].predict_proba(rows)[:, 1]
     return [
         Prediction(high_tip_probability=round(float(p), 4),
-                   high_tip=bool(p >= 0.5),
+                   high_tip=bool(p >= THRESHOLD),
                    model_version=str(_state["version"]))
         for p in probas
     ]

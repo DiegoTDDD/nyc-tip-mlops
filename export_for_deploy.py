@@ -16,11 +16,14 @@ Commit `serving_model/` to the repo. It is small (a few MB).
 """
 
 import json
+import logging
 import os
 import shutil
 
 import mlflow
 from mlflow.tracking import MlflowClient
+
+log = logging.getLogger(__name__)
 
 TRACKING_URI = "sqlite:///mlflow.db"
 REGISTERED_MODEL_NAME = "nyc_tip_classifier"
@@ -30,11 +33,12 @@ OUT_DIR = "serving_model"
 
 
 def main() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
     mlflow.set_tracking_uri(TRACKING_URI)
     client = MlflowClient()
 
     champ = client.get_model_version_by_alias(REGISTERED_MODEL_NAME, CHAMPION_ALIAS)
-    print(f"Champion: {REGISTERED_MODEL_NAME} v{champ.version} (run {champ.run_id})")
+    log.info(f"Champion: {REGISTERED_MODEL_NAME} v{champ.version} (run {champ.run_id})")
 
     # Fresh output dir
     if os.path.exists(OUT_DIR):
@@ -47,12 +51,12 @@ def main() -> None:
         f"models:/{REGISTERED_MODEL_NAME}@{CHAMPION_ALIAS}"
     )
     shutil.copytree(local_model, model_dst)
-    print(f"  saved model -> {model_dst}")
+    log.info(f"  saved model -> {model_dst}")
 
     # 2) Zone encodings (downloaded from the champion run).
     enc_path = client.download_artifacts(champ.run_id, "zone_encodings.json")
     shutil.copy(enc_path, os.path.join(OUT_DIR, "zone_encodings.json"))
-    print("  saved zone_encodings.json")
+    log.info("  saved zone_encodings.json")
 
     # 3) Registry history table (all versions + their validation metrics).
     history = []
@@ -70,14 +74,14 @@ def main() -> None:
     history.sort(key=lambda r: r["version"])
     with open(os.path.join(OUT_DIR, "registry_history.json"), "w") as f:
         json.dump(history, f, indent=2)
-    print(f"  saved registry_history.json ({len(history)} versions)")
+    log.info(f"  saved registry_history.json ({len(history)} versions)")
 
     # 4) Champion pointer.
     with open(os.path.join(OUT_DIR, "champion.json"), "w") as f:
         json.dump({"version": int(champ.version)}, f)
-    print("  saved champion.json")
+    log.info("  saved champion.json")
 
-    print(f"\nDone. Commit the '{OUT_DIR}/' folder to the repo.")
+    log.info(f"Done. Commit the '{OUT_DIR}/' folder to the repo.")
 
 
 if __name__ == "__main__":

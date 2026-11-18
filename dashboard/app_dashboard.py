@@ -22,11 +22,15 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from datetime import datetime, time
+from pathlib import Path
 
-import numpy as np
 import pandas as pd
 import streamlit as st
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from nyc_tip.features import ZoneEncodings, trip_features  # noqa: E402
 
 # Optional deps used by the live-prediction fallback. Imported lazily so
 # the rest of the dashboard renders even if something is missing.
@@ -50,20 +54,6 @@ DRIFT_SUMMARY_PATH = "monitoring/drift_summary.json"
 # (mlflow.db / mlruns/) is not available, e.g. on Streamlit Cloud.
 SERVING_MODEL_DIR = "serving_model"
 API_URL = os.environ.get("PREDICT_API_URL", "http://localhost:8000")
-
-MODEL_FEATURES = [
-    "trip_distance", "trip_duration_min", "avg_speed_mph", "pickup_dayofweek",
-    "is_weekend", "passenger_count", "hour_sin", "hour_cos",
-    "pu_zone_tip_rate", "do_zone_tip_rate",
-]
-FEATURE_DTYPES = {
-    "trip_distance": "float64", "trip_duration_min": "float64",
-    "avg_speed_mph": "float64", "pickup_dayofweek": "int32",
-    "is_weekend": "int64", "passenger_count": "int64",
-    "hour_sin": "float64", "hour_cos": "float64",
-    "pu_zone_tip_rate": "float64", "do_zone_tip_rate": "float64",
-}
-
 
 # --------------------------------------------------------------------------
 # Data loading helpers (cached)
@@ -133,13 +123,13 @@ def load_local_model():
     Prefers the live MLflow registry; falls back to the version-controlled
     serving_model/ bundle when MLflow is unavailable (e.g. Streamlit Cloud).
     """
-    import mlflow.pyfunc
+    import mlflow.xgboost  # native model: predict_proba gives a probability, pyfunc a class
 
     # Try the live MLflow registry first.
     try:
         client = get_mlflow_client()
         mv = client.get_model_version_by_alias(REGISTERED_MODEL_NAME, CHAMPION_ALIAS)
-        model = mlflow.pyfunc.load_model(f"models:/{REGISTERED_MODEL_NAME}@{CHAMPION_ALIAS}")
+        model = mlflow.xgboost.load_model(f"models:/{REGISTERED_MODEL_NAME}@{CHAMPION_ALIAS}")
         enc_path = client.download_artifacts(mv.run_id, "zone_encodings.json")
         with open(enc_path) as f:
             enc = json.load(f)
@@ -150,7 +140,7 @@ def load_local_model():
         pass
 
     # Fallback: version-controlled bundle.
-    model = mlflow.pyfunc.load_model(os.path.join(SERVING_MODEL_DIR, "model"))
+    model = mlflow.xgboost.load_model(os.path.join(SERVING_MODEL_DIR, "model"))
     with open(os.path.join(SERVING_MODEL_DIR, "zone_encodings.json")) as f:
         enc = json.load(f)
     pu_map = {int(k): v for k, v in enc["pu_zone_tip_rate"].items()}
@@ -161,25 +151,6 @@ def load_local_model():
         with open(champ_path) as f:
             version = json.load(f).get("version", "?")
     return model, pu_map, do_map, enc["pu_prior"], enc["do_prior"], version
-
-
-def engineer_row(dist, pickup_dt, dropoff_dt, pu_id, do_id, pax,
-                 pu_map, do_map, pu_prior, do_prior) -> pd.DataFrame:
-    dur = (dropoff_dt - pickup_dt).total_seconds() / 60.0
-    hours = max(dur / 60.0, 1e-3)
-    row = {
-        "trip_distance": dist,
-        "trip_duration_min": dur,
-        "avg_speed_mph": min(dist / hours, 80.0),
-        "pickup_dayofweek": pickup_dt.weekday(),
-        "is_weekend": 1 if pickup_dt.weekday() >= 5 else 0,
-        "passenger_count": pax,
-        "hour_sin": np.sin(2 * np.pi * pickup_dt.hour / 24.0),
-        "hour_cos": np.cos(2 * np.pi * pickup_dt.hour / 24.0),
-        "pu_zone_tip_rate": pu_map.get(pu_id, pu_prior),
-        "do_zone_tip_rate": do_map.get(do_id, do_prior),
-    }
-    return pd.DataFrame([row])[MODEL_FEATURES].astype(FEATURE_DTYPES)
 
 
 # --------------------------------------------------------------------------
@@ -314,10 +285,9 @@ if submitted:
         if proba is None:
             try:
                 model, pu_map, do_map, pu_prior, do_prior, _ = load_local_model()
-                X = engineer_row(dist, pickup_dt, dropoff_dt, int(pu_id),
-                                 int(do_id), int(pax), pu_map, do_map,
-                                 pu_prior, do_prior)
-                proba = float(np.asarray(model.predict(X)).ravel()[0])
+                X = trip_features(dist, pickup_dt, dropoff_dt, int(pu_id), int(do_id), int(pax),
+                                  ZoneEncodings(pu_map, do_map, pu_prior, do_prior))
+                proba = float(model.predict_proba(X)[0, 1])
                 source = "local champion model"
             except Exception as e:
                 st.error(f"Could not score the trip: {e}")

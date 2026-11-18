@@ -19,6 +19,7 @@ COPY requirements-api.txt .
 RUN pip install --no-cache-dir -r requirements-api.txt
 
 # Copy only what the API needs.
+COPY nyc_tip/ ./nyc_tip/
 COPY serving/ ./serving/
 
 EXPOSE 8000

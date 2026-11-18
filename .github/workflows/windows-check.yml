@@ -41,10 +41,10 @@ jobs:
           pip install -r requirements.txt
           pip check
 
-      - name: "README, tests: pytest tests/test_features.py"
+      - name: "README, tests: pytest"
         run: |
           conda activate mlops
-          pytest tests/test_features.py
+          pytest
 
       - name: "README step 4 (sample data): train and register the champion with MLflow"
         run: |
@@ -65,7 +65,7 @@ jobs:
           echo
           curl -sf -X POST http://127.0.0.1:8000/predict -H 'content-type: application/json' \
             -d '{"trip_distance":3.2,"pickup_datetime":"2026-03-04T18:10:00","dropoff_datetime":"2026-03-04T18:32:00","pu_location_id":161,"do_location_id":237,"passenger_count":1}' | tee predict.json
-          python -c "import json; d=json.load(open('predict.json')); assert 0 <= d['high_tip_probability'] <= 1"
+          python -c "import json; d=json.load(open('predict.json')); assert 0 < d['high_tip_probability'] < 1, d"
 
       - name: "README step 7: the dashboard starts"
         run: |

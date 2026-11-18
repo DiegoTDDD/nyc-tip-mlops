@@ -12,12 +12,17 @@ Produces:
     features/train.parquet  (a few thousand rows)
 """
 
+import logging
 import os
+
 import numpy as np
 import pandas as pd
 
+log = logging.getLogger(__name__)
 
-def main(n: int = 8000, seed: int = 42) -> None:
+
+def make_sample(n: int = 8000, seed: int = 42) -> pd.DataFrame:
+    """Deterministic feature table with the columns build_features.py writes."""
     rng = np.random.default_rng(seed)
 
     distance = rng.exponential(3.0, n).clip(0.1, 60)
@@ -47,10 +52,16 @@ def main(n: int = 8000, seed: int = 42) -> None:
         "high_tip": high_tip.astype("int64"),
     })
 
+    return df
+
+
+def main() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    df = make_sample()
     os.makedirs("features", exist_ok=True)
     df.to_parquet("features/train.parquet", index=False)
-    print(f"Wrote features/train.parquet with {len(df):,} rows "
-          f"({df['high_tip'].mean():.1%} positive)")
+    log.info("Wrote features/train.parquet with %s rows (%.1f%% positive)", f"{len(df):,}",
+             100 * df["high_tip"].mean())
 
 
 if __name__ == "__main__":

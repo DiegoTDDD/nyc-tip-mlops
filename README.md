@@ -1,39 +1,33 @@
 # NYC Taxi High-Tip Classifier — End-to-End MLOps
 
-An end-to-end MLOps system that predicts whether a New York City taxi trip
-will yield a **high tip** (more than 20% of the fare), built to production
-standards: versioned training, a model registry with automatic promotion,
-a containerized serving API, data-drift monitoring, an operations
-dashboard, and a CI/CD pipeline.
+[![CI](https://github.com/DiegoTDDD/nyc-tip-mlops/actions/workflows/ci.yml/badge.svg)](https://github.com/DiegoTDDD/nyc-tip-mlops/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-The emphasis of this project is **the engineering around the model**, not
-the model's raw accuracy. The prediction target was deliberately kept
-honest (no label leakage), which makes it genuinely hard — and that choice
-is itself part of the story (see *Modeling honesty* below).
+**Problem.** A model is only useful in production if every step around it can be trusted: training that can be repeated, a clear rule for which version is live, a service that computes features exactly as training did, and a signal when the data changes.
 
-**Author:** Diego Leonardo Alves de Andrade
+**Solution.** An end-to-end MLOps system around a classifier that predicts, at pickup, whether a NYC taxi ride will tip more than 20% of the fare. It has versioned training with MLflow, a model registry with automatic promotion, a FastAPI service, Evidently drift monitoring, a Streamlit operations dashboard and CI that runs the whole loop, including Docker.
 
-**Live dashboard:** https://nyc-tip-mlops.streamlit.app/
-
-**Repository:** https://github.com/DiegoTDDD/nyc-tip-mlops
+- **Live dashboard:** [nyc-tip-mlops.streamlit.app](https://nyc-tip-mlops.streamlit.app/)
+- **Design decisions:** [`docs/adr/`](docs/adr/README.md)
+- **Author:** Diego Leonardo Alves de Andrade
 
 ![Streamlit operations dashboard](docs/screenshots/dashboard_model.png)
 
 ---
 
-## What this demonstrates
+## Results
 
-| Capability | How it shows up here |
+| | |
 |---|---|
-| Feature engineering without leakage | Credit-card-only filter, target-encoded zones fit on train only |
-| Versioned training | Every run logged to MLflow (params, metrics, plots, artifacts) |
-| Model registry + promotion | `nyc_tip_classifier` with a `champion` alias, promoted automatically when a new run beats the incumbent |
-| Hyperparameter search | 12-combination grid, each a nested MLflow run |
-| Model serving | FastAPI service that loads the champion straight from the registry and reproduces the exact training-time feature engineering |
-| Data-drift monitoring | Evidently report comparing 2024 (reference) vs 2025 (current) |
-| Containerization | Docker Compose running the API and the MLflow UI together |
-| CI/CD | GitHub Actions: unit tests, an exact-versions install + API test and a Docker Compose test on every push, scheduled automated retraining, a weekly security audit and a live-app health check |
-| Operations dashboard | Streamlit console: champion metrics, registry history, drift status, live prediction |
+| Champion | `nyc_tip_classifier` v2 (XGBoost), promoted automatically |
+| Validation AUC | **0.624** (honest ceiling without label leakage; see [ADR 0001](docs/adr/0001-no-label-leakage.md)) |
+| Precision / recall / F1 at 0.5 | 0.813 / 0.620 / 0.704 |
+| Hyperparameter search | 12 combinations, each a nested MLflow run. Deeper models overfit |
+| Drift, Jan 2024 to Jan 2025 | Model features stable; `payment_type` drifted ("unknown" share 4% to 13%) |
+| Tests | 29: the feature code, the training-vs-API feature check, the promotion rule, reproducible training, a real MLflow registry and every API endpoint |
+| CI | Lint, tests, an exact-versions install and API call, the Docker Compose stack, a weekly retrain, a Windows run, a security audit and a live-app check |
+
+The project's value is the engineering around the model, not the score: tipping is hard to predict from trip data, and the leakage-free framing keeps AUC modest on purpose.
 
 ---
 
@@ -102,10 +96,13 @@ honest 0.62 with a clean pipeline is worth more than a leaky 0.99.
 ## Versioned training & model registry (MLflow)
 
 Every training run is logged to MLflow with its parameters, metrics, and
-diagnostic plots. The two entry points (`train.py` and `train_v2.py`) each
-register a new version of `nyc_tip_classifier`, and the best run is promoted
-to the `champion` alias automatically — that alias is what the serving layer
-loads, so promotion is the single source of truth for "what's in production".
+diagnostic plots. `train_v2.py` registers each new version of
+`nyc_tip_classifier` and moves the `champion` alias to it only if its
+validation AUC beats the current champion's. That alias is what the serving
+layer loads, so promotion is the single source of truth for "what's in
+production". The baseline `train.py` logs to the same experiment for
+comparison but never registers, because its inputs differ from what the API
+sends ([ADR 0002](docs/adr/0002-one-registered-model-strict-promotion.md)).
 
 **Training runs — versions, sources, and registered models**
 ![MLflow runs](docs/screenshots/mlflow_runs.png)
@@ -121,22 +118,13 @@ combination logged as a nested child run so they can be compared side by side.
 
 ---
 
-## Results
-
-- **Champion:** `nyc_tip_classifier` v2 (XGBoost), promoted automatically.
-- **Validation:** AUC ≈ 0.6239, precision ≈ 0.8134, recall ≈ 0.6204, F1 ≈ 0.7039.
-- **Drift:** between 2024 and 2025 the model's input features were stable,
-  but the **payment-type mix drifted** (the "unknown" share roughly tripled,
-  4% → 13%) — a real population shift the monitoring layer flags while
-  correctly reporting the model's own features as stable.
-
----
-
 ## Serving the champion (FastAPI)
 
-The API loads the champion straight from the MLflow registry and reproduces
-the exact training-time feature engineering, so a raw trip in equals a
-prediction out — no train/serve skew. It exposes `/`, `/health`, `/predict`,
+The API loads the champion straight from the MLflow registry and builds the
+features with the same module training uses (`nyc_tip/features.py`), so a raw
+trip in equals the training feature row; a test checks this on 60 random trips.
+It loads the native XGBoost model and returns `predict_proba`
+([ADR 0003](docs/adr/0003-shared-features-native-model-serving.md)). It exposes `/`, `/health`, `/predict`,
 and `/predict/batch`.
 
 **Interactive API docs — the four endpoints**
@@ -180,6 +168,34 @@ otherwise.
 
 ---
 
+## Design decisions
+
+| Decision | Why |
+|---|---|
+| [Credit-card trips only; zone encodings fit on the training split](docs/adr/0001-no-label-leakage.md) | Cash trips would leak the label; encodings fit on all rows would leak validation |
+| [Only train_v2 registers; strict promotion](docs/adr/0002-one-registered-model-strict-promotion.md) | The champion must always accept the features the API sends |
+| [Shared feature module; native XGBoost serving](docs/adr/0003-shared-features-native-model-serving.md) | Removes three copies of the feature code, and makes the API return a real probability |
+| [Local MLflow and a committed champion bundle](docs/adr/0004-local-mlflow-and-deploy-bundle.md) | Free, reproducible, and the public dashboard still works without the store |
+| [Drift is reported, not auto-retrained](docs/adr/0005-drift-report-not-auto-retrain.md) | The column that drifted is not a feature, and there are no live labels |
+
+### Fixed in the latest review
+
+- **The API returned a class, not a probability.** MLflow's `pyfunc` wrapper calls `predict()`, so `high_tip_probability` was always 0 or 1. The API and the dashboard now load the native XGBoost model and use `predict_proba`. CI requires a value strictly between 0 and 1.
+- **The baseline trainer could take over the champion alias** with a model whose inputs the API does not send. It now logs for comparison only.
+- **The tests checked a copy of the feature code** written inside the test file. They now import the real module, which training, the API and the dashboard share.
+
+---
+
+## Limitations
+
+- **Modest signal.** AUC 0.62. Tipping depends on people, not trips, and the model sees only trip data.
+- **Promotion compares each run's own validation split.** If the training data changes between runs, the AUCs are not strictly comparable. A fixed, versioned holdout set would make promotion airtight.
+- **The weekly CI retrain uses synthetic sample data.** It exercises the code path, but it does not retrain on new TLC months.
+- **Drift is reported, not acted on.** Closing the loop needs labelled production data and a performance threshold.
+- **Single machine.** SQLite and a local artifact store, with no authentication on the API or the MLflow UI (both bound to localhost).
+
+---
+
 ## Tech stack
 
 Python 3.11 · pandas · scikit-learn · XGBoost · **MLflow** (tracking +
@@ -192,14 +208,16 @@ Compose** · **GitHub Actions** · Streamlit · Plotly.
 
 ```
 nyc-tip-mlops/
+├── nyc_tip/
+│   └── features.py              # the only feature code: cleaning, target, encodings, API row
 ├── build_features.py            # raw parquet -> leakage-free feature table
 ├── build_monitoring_snapshot.py # full-population snapshots for drift
 ├── inspect_data.py              # quick look at the raw TLC files (schema, row counts)
 ├── export_for_deploy.py         # exports the champion into serving_model/
 ├── serving_model/               # versioned champion bundle used by Streamlit Cloud
 ├── training/
-│   ├── train.py                 # baseline trainer
-│   └── train_v2.py              # richer features + hyperparameter search
+│   ├── train.py                 # baseline (logged for comparison, never registered)
+│   └── train_v2.py              # features + hyperparameter search + registry promotion
 ├── serving/
 │   └── app_api.py               # FastAPI serving the champion model
 ├── monitoring/
@@ -207,17 +225,14 @@ nyc-tip-mlops/
 ├── dashboard/
 │   ├── app_dashboard.py         # Streamlit operations console
 │   └── requirements.txt         # slim deps for Streamlit Cloud
-├── docs/screenshots/            # images used in this README
-├── tests/
-│   ├── test_features.py         # unit tests (feature logic, target)
-│   └── make_sample_data.py      # small synthetic sample for CI
-├── .github/
-│   ├── workflows/ci.yml         # tests, exact-versions + API test, Docker test, scheduled retrain
-│   ├── workflows/security-audit.yml  # pip-audit of every requirements file
-│   ├── workflows/app-health.yml # opens the live Streamlit app in a browser
-│   └── scripts/                 # helpers used by the two workflows above
+├── tests/                       # pytest: features, training + registry, API
+├── docs/
+│   ├── adr/                     # architecture decision records
+│   └── screenshots/             # images used in this README
+├── .github/                     # CI, Windows check, security audit, app health
 ├── Dockerfile.api               # API image
 ├── docker-compose.yml           # API + MLflow UI
+├── pyproject.toml               # project metadata, pytest and ruff settings
 ├── requirements.txt             # full project deps
 └── requirements-api.txt         # slim deps for the API container
 ```
@@ -322,8 +337,10 @@ stack* job in CI checks this on every push.
 ### Run the tests
 
 ```bash
-pytest tests/test_features.py
+pytest
 ```
+
+The suite trains two small models into a temporary MLflow store, so it needs the full `requirements.txt` but no data download.
 
 ---
 
@@ -331,10 +348,10 @@ pytest tests/test_features.py
 
 `.github/workflows/ci.yml` defines five jobs:
 
-- **test** — runs the unit-test suite on every push and pull request.
+- **test** — `ruff` (type hints required in `nyc_tip/`, `training/`, `serving/` and `monitoring/`, and no `print` there) and the 29 tests, on every push and pull request.
 - **pinned** — installs exactly `requirements.txt` (the documented versions), runs
-  `pip check` and the tests, trains on the sample data, starts the API and calls
-  `/health` and `/predict`. This is what proves a dependency bump (for example MLflow)
+  `pip check`, trains on the sample data, starts the API and calls `/health` and
+  `/predict` (the answer must be a probability strictly between 0 and 1). This is what proves a dependency bump (for example MLflow)
   still works.
 - **docker** — trains a sample model on the runner, runs `docker compose up --build`,
   waits for the API and the MLflow UI, calls `/predict` and checks that the published
@@ -356,13 +373,3 @@ Two more workflows run next to it:
 - `app-health.yml` opens the [live dashboard](https://nyc-tip-mlops.streamlit.app) in a
   real browser after each push and once a day (waking it if it was asleep) and fails if
   the app shows an error.
-
----
-
-## Notes
-
-- The honest, leakage-free framing keeps validation AUC modest (~0.62);
-  the project's value is the surrounding MLOps engineering, not the score.
-- Streamlit Cloud cannot run Docker/FastAPI, so the deployed dashboard
-  loads the champion model directly and falls back gracefully when the API
-  is not reachable.
