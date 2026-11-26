@@ -5,7 +5,7 @@
 
 **Problem.** A model is only useful in production if every step around it can be trusted: training that can be repeated, a clear rule for which version is live, a service that computes features exactly as training did, and a signal when the data changes.
 
-**Solution.** An end-to-end MLOps system around a classifier that predicts, at pickup, whether a NYC taxi ride will tip more than 20% of the fare. It has versioned training with MLflow, a model registry with automatic promotion, a FastAPI service, Evidently drift monitoring, a Streamlit operations dashboard and CI that runs the whole loop, including Docker.
+**Solution.** An end-to-end MLOps system around a classifier that predicts, when a NYC taxi ride ends and before the rider pays, whether the tip will be more than 20% of the fare. It has versioned training with MLflow, a model registry with automatic promotion, a FastAPI service, Evidently drift monitoring, a Streamlit operations dashboard and CI that runs the whole loop, including Docker.
 
 - **Live dashboard:** [nyc-tip-mlops.streamlit.app](https://nyc-tip-mlops.streamlit.app/)
 - **Design decisions:** [`docs/adr/`](docs/adr/README.md)
@@ -58,8 +58,9 @@ NYC Taxi parquet (2024 train / 2025 production)
 
 ## The problem and the data
 
-The model predicts, at the moment a trip begins, whether the rider will
-tip more than 20% of the fare. The data is the public NYC TLC Yellow Taxi
+The model predicts, when a trip ends and before payment, whether the rider will
+tip more than 20% of the fare. That is the moment the payment screen in the cab
+offers tip choices, and every feature the model uses is known by then. The data is the public NYC TLC Yellow Taxi
 trip records: **January 2024** as the training reference and **January
 2025** as the production/drift period (the month following NYC's
 congestion-pricing rollout).
@@ -70,8 +71,14 @@ Cash trips almost never record a tip, so `payment_type` trivially predicts
 "no tip". Leaving it in would produce a deceptively high score that any
 reviewer would recognize as leakage. Instead the model trains **only on
 credit-card trips** and never sees the payment channel. It must predict
-*who* tips well from trip characteristics known at pickup time: distance,
+*who* tips well from trip characteristics known when the ride ends: distance,
 duration, hour, day of week, passenger count, and pickup/dropoff zone.
+
+**When the prediction is made.** Duration, average speed and the dropoff zone
+are only known at the end of the ride, so this is an end-of-ride model, not a
+pickup-time one. An earlier version of this README said "at pickup"; that claim
+was wrong for these features and was corrected. A pickup-time model would have
+to drop them or replace them with estimates (a routed distance and duration).
 
 This is a genuinely hard signal — tipping is idiosyncratic — so the honest
 ceiling is low (validation AUC ≈ 0.62). The hyperparameter search confirmed

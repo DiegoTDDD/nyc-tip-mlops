@@ -54,7 +54,7 @@ THRESHOLD = 0.5
 
 # --- Request / response schemas --------------------------------------------
 class Trip(BaseModel):
-    """Raw fields of a single taxi trip, known at pickup time."""
+    """Raw fields of a single taxi trip, known when the ride ends, before payment."""
     trip_distance: float = Field(..., gt=0, description="Miles")
     pickup_datetime: datetime = Field(..., description="ISO timestamp")
     dropoff_datetime: datetime = Field(..., description="ISO timestamp")

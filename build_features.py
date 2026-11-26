@@ -12,10 +12,10 @@ high_tip = 1 if tip_amount / fare_amount > 0.20 else 0
 To avoid label leakage from the payment channel (cash trips almost never
 record a tip), we keep only credit-card trips (payment_type == 1) with a
 positive fare. The model must then predict *who* tips well from trip
-characteristics known at pickup time -- never from the payment type or
-any post-trip money field.
+characteristics known when the ride ends, before payment -- never from the
+payment type or any money field.
 
-Features (all known at the start of the trip)
+Features (all known when the ride ends, before payment)
 ---------------------------------------------
 trip_distance      : miles
 trip_duration_min  : minutes between pickup and dropoff
