@@ -74,12 +74,6 @@ credit-card trips** and never sees the payment channel. It must predict
 *who* tips well from trip characteristics known when the ride ends: distance,
 duration, hour, day of week, passenger count, and pickup/dropoff zone.
 
-**When the prediction is made.** Duration, average speed and the dropoff zone
-are only known at the end of the ride, so this is an end-of-ride model, not a
-pickup-time one. An earlier version of this README said "at pickup"; that claim
-was wrong for these features and was corrected. A pickup-time model would have
-to drop them or replace them with estimates (a routed distance and duration).
-
 This is a genuinely hard signal — tipping is idiosyncratic — so the honest
 ceiling is low (validation AUC ≈ 0.62). The hyperparameter search confirmed
 that deeper, larger models *overfit* and generalized worse, which is itself
