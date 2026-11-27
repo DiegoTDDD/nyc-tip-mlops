@@ -13,6 +13,9 @@ GET  /health        -> liveness probe
 POST /predict       -> probability + label for one trip
 POST /predict/batch -> same for a list of trips
 
+When the API_KEY environment variable is set, the prediction endpoints require the header
+`X-API-Key: <key>` (401 otherwise); / and /health stay open for probes.
+
 Run locally
 -----------
     uvicorn serving.app_api:app --reload --port 8000
@@ -23,6 +26,7 @@ from __future__ import annotations
 
 import logging
 import os
+import secrets
 import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -33,7 +37,8 @@ from typing import Any
 import mlflow
 import mlflow.xgboost
 import pandas as pd
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Security
+from fastapi.security import APIKeyHeader
 from mlflow.entities.model_registry import ModelVersion
 from mlflow.tracking import MlflowClient
 from pydantic import BaseModel, Field
@@ -50,11 +55,20 @@ TRACKING_URI = os.environ.get("MLFLOW_TRACKING_URI", "sqlite:///mlflow.db")
 REGISTERED_MODEL_NAME = "nyc_tip_classifier"
 CHAMPION_ALIAS = "champion"
 THRESHOLD = 0.5
+API_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+
+def require_key(given: str | None = Security(API_KEY_HEADER)) -> None:
+    """401 unless the request carries the key in API_KEY. No key configured = open (local use)."""
+    expected = os.environ.get("API_KEY")
+    if expected and not (given and secrets.compare_digest(given, expected)):
+        raise HTTPException(status_code=401, detail="missing or wrong X-API-Key")
 
 
 # --- Request / response schemas --------------------------------------------
 class Trip(BaseModel):
     """Raw fields of a single taxi trip, known when the ride ends, before payment."""
+
     trip_distance: float = Field(..., gt=0, description="Miles")
     pickup_datetime: datetime = Field(..., description="ISO timestamp")
     dropoff_datetime: datetime = Field(..., description="ISO timestamp")
@@ -95,7 +109,7 @@ def _to_local(uri: str) -> str | None:
     i = path.rfind(marker)
     if i == -1:
         return None
-    candidate = os.path.join(MLRUNS_DIR, path[i + len(marker):])
+    candidate = os.path.join(MLRUNS_DIR, path[i + len(marker) :])
     return candidate if os.path.exists(candidate) else None
 
 
@@ -108,10 +122,9 @@ def _load_from_local_mlruns(client: MlflowClient, mv: ModelVersion) -> tuple[Any
     run_dir = _to_local(client.get_run(mv.run_id).info.artifact_uri)
     if model_dir is None or run_dir is None:
         raise RuntimeError(
-            f"model artifacts not found under {MLRUNS_DIR!r} "
-            f"(registry points at {mv.source!r})")
-    return (mlflow.xgboost.load_model(model_dir),
-            os.path.join(run_dir, "zone_encodings.json"))
+            f"model artifacts not found under {MLRUNS_DIR!r} (registry points at {mv.source!r})"
+        )
+    return (mlflow.xgboost.load_model(model_dir), os.path.join(run_dir, "zone_encodings.json"))
 
 
 def _load_model() -> None:
@@ -128,8 +141,9 @@ def _load_model() -> None:
         # The trainer logged zone_encodings.json as a run artifact.
         enc_path = client.download_artifacts(mv.run_id, "zone_encodings.json")
     except Exception as first_error:
-        log.warning("Registry paths not usable here (%s); falling back to %s/",
-                    first_error, MLRUNS_DIR)
+        log.warning(
+            "Registry paths not usable here (%s); falling back to %s/", first_error, MLRUNS_DIR
+        )
         model, enc_path = _load_from_local_mlruns(client, mv)
     _state["model"] = model
     _state["version"] = str(mv.version)  # MLflow 3 returns an int; the API always reports a string
@@ -160,8 +174,12 @@ def _engineer(trip: Trip) -> pd.DataFrame:
     """Raw trip -> the exact feature row used in training (nyc_tip/features.py)."""
     try:
         return trip_features(
-            trip.trip_distance, trip.pickup_datetime, trip.dropoff_datetime,
-            trip.pu_location_id, trip.do_location_id, trip.passenger_count,
+            trip.trip_distance,
+            trip.pickup_datetime,
+            trip.dropoff_datetime,
+            trip.pu_location_id,
+            trip.do_location_id,
+            trip.passenger_count,
             _state["encodings"],
         )
     except ValueError as exc:
@@ -190,7 +208,7 @@ def health() -> dict:
     return {"status": "healthy", "model_version": _state["version"]}
 
 
-@app.post("/predict", response_model=Prediction)
+@app.post("/predict", response_model=Prediction, dependencies=[Depends(require_key)])
 def predict(trip: Trip) -> Prediction:
     _require_model()
     proba = float(_state["model"].predict_proba(_engineer(trip))[0, 1])
@@ -201,14 +219,16 @@ def predict(trip: Trip) -> Prediction:
     )
 
 
-@app.post("/predict/batch")
+@app.post("/predict/batch", dependencies=[Depends(require_key)])
 def predict_batch(trips: list[Trip]) -> list[Prediction]:
     _require_model()
     rows = pd.concat([_engineer(t) for t in trips], ignore_index=True)
     probas = _state["model"].predict_proba(rows)[:, 1]
     return [
-        Prediction(high_tip_probability=round(float(p), 4),
-                   high_tip=bool(p >= THRESHOLD),
-                   model_version=str(_state["version"]))
+        Prediction(
+            high_tip_probability=round(float(p), 4),
+            high_tip=bool(p >= THRESHOLD),
+            model_version=str(_state["version"]),
+        )
         for p in probas
     ]

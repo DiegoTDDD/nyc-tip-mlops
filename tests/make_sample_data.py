@@ -9,7 +9,8 @@ exercises the full MLflow logging + registry path.
 Run:
     python tests/make_sample_data.py
 Produces:
-    features/train.parquet  (a few thousand rows)
+    features/train.parquet    (a few thousand rows)
+    features/holdout.parquet  (different rows, for promotion)
 """
 
 import logging
@@ -34,23 +35,27 @@ def make_sample(n: int = 8000, seed: int = 42) -> pd.DataFrame:
     do = rng.integers(1, 265, n)
 
     # Weak but real signal: shorter trips and evening hours tip a bit more.
-    p = (0.55
-         + 0.20 * (distance < 3).astype(float)
-         + 0.10 * (hour >= 18).astype(float)
-         + 0.10 * rng.random(n)).clip(0.05, 0.95)
+    p = (
+        0.55
+        + 0.20 * (distance < 3).astype(float)
+        + 0.10 * (hour >= 18).astype(float)
+        + 0.10 * rng.random(n)
+    ).clip(0.05, 0.95)
     high_tip = rng.binomial(1, p)
 
-    df = pd.DataFrame({
-        "trip_distance": distance,
-        "trip_duration_min": duration,
-        "pickup_hour": hour.astype("int32"),
-        "pickup_dayofweek": dow.astype("int32"),
-        "is_weekend": (dow >= 5).astype("int64"),
-        "passenger_count": pax.astype("int64"),
-        "pu_location_id": pu.astype("int32"),
-        "do_location_id": do.astype("int32"),
-        "high_tip": high_tip.astype("int64"),
-    })
+    df = pd.DataFrame(
+        {
+            "trip_distance": distance,
+            "trip_duration_min": duration,
+            "pickup_hour": hour.astype("int32"),
+            "pickup_dayofweek": dow.astype("int32"),
+            "is_weekend": (dow >= 5).astype("int64"),
+            "passenger_count": pax.astype("int64"),
+            "pu_location_id": pu.astype("int32"),
+            "do_location_id": do.astype("int32"),
+            "high_tip": high_tip.astype("int64"),
+        }
+    )
 
     return df
 
@@ -60,8 +65,12 @@ def main() -> None:
     df = make_sample()
     os.makedirs("features", exist_ok=True)
     df.to_parquet("features/train.parquet", index=False)
-    log.info("Wrote features/train.parquet with %s rows (%.1f%% positive)", f"{len(df):,}",
-             100 * df["high_tip"].mean())
+    make_sample(n=4000, seed=7).to_parquet("features/holdout.parquet", index=False)
+    log.info(
+        "Wrote features/train.parquet with %s rows (%.1f%% positive) and features/holdout.parquet",
+        f"{len(df):,}",
+        100 * df["high_tip"].mean(),
+    )
 
 
 if __name__ == "__main__":

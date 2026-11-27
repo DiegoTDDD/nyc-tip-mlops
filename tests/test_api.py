@@ -65,8 +65,9 @@ def test_predict_sends_the_model_the_training_feature_row(client):
     http, model = client
     http.post("/predict", json=TRIP)
     pickup = datetime(2026, 3, 4, 18, 10)
-    expected = trip_features(3.2, pickup, pickup + timedelta(minutes=22), 161, 237, 1,
-                             app_api._state["encodings"])
+    expected = trip_features(
+        3.2, pickup, pickup + timedelta(minutes=22), 161, 237, 1, app_api._state["encodings"]
+    )
     assert model.seen[0].equals(expected)
 
 
@@ -104,3 +105,20 @@ def test_the_real_champion_loads_from_the_registry_and_predicts(registry, monkey
         os.chdir(previous)
     # A probability, not the class: the pyfunc wrapper used to return exactly 0 or 1.
     assert 0.0 < proba < 1.0
+
+
+def test_an_api_key_protects_the_prediction_endpoints(client, monkeypatch):
+    http, _ = client
+    monkeypatch.setenv("API_KEY", "s3cret")
+    assert http.post("/predict", json=TRIP).status_code == 401
+    assert http.post("/predict", json=TRIP, headers={"X-API-Key": "wrong"}).status_code == 401
+    assert http.post("/predict/batch", json=[TRIP]).status_code == 401
+    ok = http.post("/predict", json=TRIP, headers={"X-API-Key": "s3cret"})
+    assert ok.status_code == 200 and ok.json()["high_tip_probability"] == 0.73
+    assert http.get("/health").status_code == 200  # probes stay open
+
+
+def test_without_a_configured_key_the_api_is_open(client, monkeypatch):
+    http, _ = client
+    monkeypatch.delenv("API_KEY", raising=False)
+    assert http.post("/predict", json=TRIP).status_code == 200

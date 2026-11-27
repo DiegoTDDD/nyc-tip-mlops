@@ -1,6 +1,6 @@
 # 0005. Drift is reported, not wired to automatic retraining
 
-**Status:** Accepted
+**Status:** Superseded by [0007](0007-monthly-retrain-loop.md): labels do arrive each month with the card payments, so a monthly loop now retrains on real data and checks performance. The Evidently report stays as described here.
 
 ## Context
 Evidently compares January 2024 (reference) with January 2025 (current). The only column that drifts is `payment_type`: the "unknown" share rose from 4% to 13%. That column is not a model feature, because the model only sees card trips.

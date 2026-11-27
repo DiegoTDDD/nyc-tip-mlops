@@ -13,6 +13,28 @@
     "val_f1": 0.7039314745736764,
     "val_precision": 0.8133801601546321,
     "val_recall": 0.6204442981734408,
+    "is_champion": false
+  },
+  {
+    "version": 3,
+    "trained_on": "2026-08",
+    "evaluated_on": "2026-09",
+    "eval_auc": 0.6251,
+    "champion_version": 2,
+    "champion_eval_auc": 0.6153,
+    "gain_ci": [
+      0.0082,
+      0.0112
+    ],
+    "eval_rows": 500000,
+    "eval_fingerprint": "f4dde86095ccc748",
+    "val_auc": 0.6319,
+    "val_f1": 0.703,
+    "val_precision": 0.7964,
+    "val_recall": 0.6292,
+    "promoted": true,
+    "reason": "gain +0.0098, 95% interval [+0.0082, +0.0112] excludes zero: promoted",
+    "decided_at": "2026-11-27",
     "is_champion": true
   }
 ]

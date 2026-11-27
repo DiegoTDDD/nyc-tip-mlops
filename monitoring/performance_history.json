@@ -1,0 +1,10 @@
+[
+  {
+    "month": "2026-09",
+    "champion_version": 2,
+    "auc": 0.6153,
+    "rows": 500000,
+    "high_tip_rate": 0.7337,
+    "below_floor": false
+  }
+]

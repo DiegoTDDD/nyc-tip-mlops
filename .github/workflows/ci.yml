@@ -3,15 +3,10 @@
 # Jobs:
 #   test    : lint + the full test suite (features, training and the MLflow
 #             registry, the API) on every push and pull request.
-#   retrain : on a weekly schedule (and on demand) regenerates a small
-#             sample, runs the full training + MLflow logging + registry
-#             promotion path, and uploads the resulting model artifacts.
-#             This demonstrates the automated-retraining loop that closes
-#             the MLOps cycle.
+#   api     : the pinned API requirements, a sample training run and real calls.
+#   docker  : the Docker Compose stack.
 #
-# The retrain job trains on a small synthetic sample (tests/make_sample_data.py)
-# rather than the multi-hundred-MB monthly parquet, so it runs in seconds
-# and never depends on an external download.
+# The monthly retrain on real TLC data lives in retrain.yml (ADR 0007).
 
 name: CI
 
@@ -20,9 +15,6 @@ on:
     branches: [ main ]
   pull_request:
     branches: [ main ]
-  schedule:
-    # Every Monday at 06:00 UTC -- the "scheduled retrain" trigger.
-    - cron: "0 6 * * 1"
   workflow_dispatch: {}   # allows manual "Run workflow" from the Actions tab
 
 jobs:
@@ -147,54 +139,3 @@ jobs:
       - name: Tear down
         if: always()
         run: docker compose down -v
-
-  keepalive:
-    name: Keep scheduled workflow enabled
-    # GitHub disables scheduled workflows after 60 days without repository
-    # activity, and a disabled workflow also stops running on push. Re-enabling
-    # the workflow on every scheduled run keeps it alive.
-    if: github.event_name == 'schedule'
-    runs-on: ubuntu-latest
-    permissions:
-      actions: write
-    steps:
-      - name: Re-enable this workflow
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/ci.yml/enable"
-
-  retrain:
-    name: Scheduled retrain
-    runs-on: ubuntu-latest
-    # Run after tests pass; only on schedule or manual dispatch, not on
-    # every push (keeps PR feedback fast).
-    needs: test
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install training dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements-api.txt matplotlib==3.11.0
-
-      - name: Generate sample data
-        run: python tests/make_sample_data.py
-
-      - name: Train, log to MLflow, and promote champion
-        run: python training/train_v2.py --sample 0
-
-      - name: Upload model + tracking store
-        uses: actions/upload-artifact@v4
-        with:
-          name: mlflow-model
-          path: |
-            mlflow.db
-            mlruns/
-          retention-days: 14

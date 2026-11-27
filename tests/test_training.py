@@ -6,14 +6,6 @@ import train_v2
 from mlflow.tracking import MlflowClient
 
 
-@pytest.mark.parametrize(
-    ("new", "champion", "expected"),
-    [(0.62, None, True), (0.63, 0.62, True), (0.62, 0.62, False), (0.61, 0.62, False)],
-)
-def test_a_new_version_must_beat_the_champion_to_replace_it(new, champion, expected):
-    assert train_v2.should_promote(new, champion) is expected
-
-
 def test_stratified_sample_keeps_the_class_balance(sample_table):
     sampled = train_v2.stratified_sample(sample_table, 1000)
     assert len(sampled) == pytest.approx(1000, abs=2)
@@ -28,7 +20,15 @@ def test_first_version_becomes_champion(registry):
 
 
 def test_training_is_reproducible(registry):
-    assert registry["second"].metrics == registry["first"].metrics
+    for key in ("val_auc", "val_f1", "holdout_auc"):
+        assert registry["second"].metrics[key] == registry["first"].metrics[key]
+
+
+def test_the_second_run_is_compared_with_the_champion_on_the_same_holdout(registry):
+    first, second = registry["first"].decision, registry["second"].decision
+    assert first.fingerprint == second.fingerprint  # the same rows
+    assert second.champion_auc == pytest.approx(first.challenger_auc)  # the champion, re-scored
+    assert second.gain == pytest.approx(0) and not second.promote  # identical model: no gain
 
 
 def test_an_equal_model_is_registered_but_not_promoted(registry):

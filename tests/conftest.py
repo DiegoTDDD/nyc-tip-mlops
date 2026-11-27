@@ -25,16 +25,19 @@ def sample_table():
 def registry(tmp_path_factory, sample_table):
     """Train twice into a throwaway MLflow store; return the store and both results."""
     import train_v2
+    from make_sample_data import make_sample
 
     folder = tmp_path_factory.mktemp("mlflow")
     data = folder / "train.parquet"
     sample_table.to_parquet(data, index=False)
+    holdout = folder / "holdout.parquet"
+    make_sample(n=3000, seed=7).to_parquet(holdout, index=False)
     uri = f"sqlite:///{folder / 'mlflow.db'}"
     previous = Path.cwd()
     os.chdir(folder)  # MLflow writes artifacts under ./mlruns
     try:
-        first = train_v2.run(data, sample=0, tracking_uri=uri, grid=TINY_GRID)
-        second = train_v2.run(data, sample=0, tracking_uri=uri, grid=TINY_GRID)
+        first = train_v2.run(data, sample=0, tracking_uri=uri, grid=TINY_GRID, holdout=holdout)
+        second = train_v2.run(data, sample=0, tracking_uri=uri, grid=TINY_GRID, holdout=holdout)
     finally:
         os.chdir(previous)
     return {"uri": uri, "folder": folder, "first": first, "second": second}

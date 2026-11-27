@@ -50,6 +50,8 @@ TRACKING_URI = os.environ.get("MLFLOW_TRACKING_URI", "sqlite:///mlflow.db")
 REGISTERED_MODEL_NAME = "nyc_tip_classifier"
 CHAMPION_ALIAS = "champion"
 DRIFT_SUMMARY_PATH = "monitoring/drift_summary.json"
+PERFORMANCE_PATH = "monitoring/performance_history.json"
+AUC_FLOOR = 0.60  # training/retrain.py
 # Lightweight, version-controlled bundle used when the MLflow store
 # (mlflow.db / mlruns/) is not available, e.g. on Streamlit Cloud.
 SERVING_MODEL_DIR = "serving_model"
@@ -106,6 +108,15 @@ def load_registry_history() -> pd.DataFrame:
             rows = json.load(f)
         return pd.DataFrame(rows).sort_values("version") if rows else pd.DataFrame()
     return pd.DataFrame()
+
+
+@st.cache_data(show_spinner=False)
+def load_performance() -> pd.DataFrame:
+    """The champion's AUC on each newly published month (training/retrain.py)."""
+    if not os.path.exists(PERFORMANCE_PATH):
+        return pd.DataFrame()
+    with open(PERFORMANCE_PATH) as f:
+        return pd.DataFrame(json.load(f))
 
 
 @st.cache_data(show_spinner=False)
@@ -177,28 +188,44 @@ else:
     champ = history[history["is_champion"]]
     champ = champ.iloc[0] if not champ.empty else history.iloc[-1]
 
+    monthly = "eval_auc" in champ.index and pd.notna(champ.get("eval_auc"))
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Champion version", f"v{int(champ['version'])}")
-    c2.metric("Validation AUC", f"{champ['val_auc']:.4f}" if pd.notna(champ['val_auc']) else "n/a")
-    c3.metric("Precision", f"{champ['val_precision']:.3f}" if pd.notna(champ['val_precision']) else "n/a")
-    c4.metric("Recall", f"{champ['val_recall']:.3f}" if pd.notna(champ['val_recall']) else "n/a")
+    if monthly:
+        c2.metric(f"AUC on {champ['evaluated_on']}", f"{champ['eval_auc']:.4f}")
+        c3.metric("Trained on", champ["trained_on"])
+        c4.metric("Promoted", champ.get("decided_at", ""))
+    else:
+        c2.metric("Validation AUC", f"{champ['val_auc']:.4f}" if pd.notna(champ['val_auc']) else "n/a")
+        c3.metric("Precision", f"{champ['val_precision']:.3f}" if pd.notna(champ['val_precision']) else "n/a")
+        c4.metric("Recall", f"{champ['val_recall']:.3f}" if pd.notna(champ['val_recall']) else "n/a")
 
     st.subheader("Registry history")
-    st.caption("Every registered version and its validation AUC. The champion "
-               "is the best performer, promoted automatically at train time.")
+    st.caption("Every version and how it was judged. Since the monthly loop, a challenger is "
+               "trained on one month and compared with the champion on the next month, the same "
+               "rows for both; it is promoted only if the 95% bootstrap interval of its AUC gain "
+               "is above zero.")
     show = history.copy()
     show["champion"] = show["is_champion"].map({True: "★", False: ""})
-    show = show[["version", "val_auc", "val_f1", "val_precision",
-                 "val_recall", "champion"]]
-    st.dataframe(
-        show.style.format({
-            "val_auc": "{:.4f}", "val_f1": "{:.4f}",
-            "val_precision": "{:.4f}", "val_recall": "{:.4f}",
-        }),
-        use_container_width=True, hide_index=True,
-    )
-    if len(history) > 1:
-        st.bar_chart(history.set_index("version")["val_auc"], height=200)
+    cols = [c for c in ["version", "trained_on", "evaluated_on", "eval_auc", "champion_eval_auc",
+                        "gain_ci", "val_auc", "promoted", "champion"] if c in show.columns]
+    show = show[cols]
+    if "gain_ci" in show.columns:
+        show["gain_ci"] = show["gain_ci"].map(
+            lambda ci: f"[{ci[0]:+.4f}, {ci[1]:+.4f}]" if isinstance(ci, list) else "")
+    st.dataframe(show, width="stretch", hide_index=True)
+    if "reason" in history.columns and pd.notna(history.iloc[-1].get("reason")):
+        last = history.iloc[-1]
+        st.info(f"Last decision (v{int(last['version'])}, trained on {last['trained_on']}, "
+                f"evaluated on {last['evaluated_on']}): {last['reason']}.")
+
+perf = load_performance()
+if not perf.empty:
+    st.subheader("Champion performance on each new month")
+    st.caption("Tips are recorded with the card payment, so every month TLC publishes labels "
+               f"that month's trips. Below an AUC of {AUC_FLOOR:.2f} the monthly job opens an alert.")
+    chart = perf.set_index("month")[["auc"]].assign(floor=AUC_FLOOR)
+    st.line_chart(chart, height=220)
 
 # --------------------------------------------------------------------------
 # Section 3: drift
@@ -230,7 +257,7 @@ else:
         dfp = pd.DataFrame(rows).sort_values("drift_score", ascending=False)
         st.dataframe(
             dfp.style.format({"drift_score": "{:.4f}", "threshold": "{:.2f}"}),
-            use_container_width=True, hide_index=True,
+            width="stretch", hide_index=True,
         )
 
 # --------------------------------------------------------------------------

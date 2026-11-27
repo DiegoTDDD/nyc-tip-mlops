@@ -1,0 +1,85 @@
+name: Monthly retrain
+
+# The production loop on real data (training/retrain.py, ADR 0007). On the 20th of each month,
+# when TLC has usually published a new month: find the newest month, record how the champion
+# does on it, train a challenger on the month before, compare the two on the same rows, and
+# commit the result. A promotion rewrites serving_model/, which the dashboard and the API read.
+# A champion below the AUC floor opens an issue labelled model-alert.
+on:
+  schedule:
+    - cron: "37 8 20 * *"
+  workflow_dispatch:
+    inputs:
+      eval_month:
+        description: "Month to evaluate on (YYYY-MM); empty = the newest TLC month"
+        required: false
+
+permissions:
+  contents: write
+  issues: write
+  actions: write
+
+concurrency:
+  group: retrain
+  cancel-in-progress: false
+
+jobs:
+  retrain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install the pinned dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run the monthly loop on real TLC data
+        id: loop
+        run: python training/retrain.py ${{ inputs.eval_month && format('--eval-month {0}', inputs.eval_month) || '' }}
+
+      - name: The new bundle loads and predicts (only when promoted)
+        if: steps.loop.outputs.promoted == 'true'
+        run: |
+          python - <<'PY'
+          import sys
+          sys.path[:0] = [".", "training"]
+          from retrain import load_bundle
+          from nyc_tip.features import trip_features
+          from datetime import datetime
+          model, enc, version = load_bundle(__import__("pathlib").Path("serving_model"))
+          row = trip_features(3.2, datetime(2026, 3, 4, 18, 10), datetime(2026, 3, 4, 18, 32), 161, 237, 1, enc)
+          p = float(model.predict_proba(row)[0, 1])
+          assert 0 < p < 1, p
+          print(f"v{version} predicts {p:.4f}")
+          PY
+
+      - name: Commit the decision and the histories
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add serving_model monitoring/performance_history.json
+          git commit -m "Monthly retrain: evaluated on ${{ steps.loop.outputs.eval_month }}, challenger v${{ steps.loop.outputs.version }} ${{ steps.loop.outputs.promoted == 'true' && 'promoted' || 'not promoted' }}" || exit 0
+          git pull --rebase --quiet origin main
+          git push origin HEAD:main
+
+      - name: Alert when the champion is below the floor
+        if: steps.loop.outputs.alert == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh label create model-alert --color B60205 --description "Champion below the AUC floor" --force
+          gh issue create --label model-alert \
+            --title "Champion AUC ${{ steps.loop.outputs.champion_auc }} on ${{ steps.loop.outputs.eval_month }}, below the floor" \
+            --body "The monthly retrain measured the champion below an AUC of 0.60. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}. Check monitoring/performance_history.json and the last row of serving_model/registry_history.json."
+
+      - name: Keep the monthly schedule enabled
+        if: ${{ always() && github.event_name == 'schedule' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/retrain.yml/enable"
