@@ -21,7 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Give Streamlit Cloud time to rebuild after a push
         if: github.event_name == 'push'
@@ -34,7 +34,7 @@ jobs:
           curl -s -w "\nhealth: HTTP %{http_code}\n" -L --max-redirs 10 "$APP_URL/_stcore/health" || true
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.11"
 
