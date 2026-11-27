@@ -213,6 +213,8 @@ else:
     if "gain_ci" in show.columns:
         show["gain_ci"] = show["gain_ci"].map(
             lambda ci: f"[{ci[0]:+.4f}, {ci[1]:+.4f}]" if isinstance(ci, list) else "")
+    # Versions from before the monthly loop were judged on validation AUC only.
+    show = show.astype(object).where(show.notna(), "—")
     st.dataframe(show, width="stretch", hide_index=True)
     if "reason" in history.columns and pd.notna(history.iloc[-1].get("reason")):
         last = history.iloc[-1]
@@ -222,10 +224,16 @@ else:
 perf = load_performance()
 if not perf.empty:
     st.subheader("Champion performance on each new month")
-    st.caption("Tips are recorded with the card payment, so every month TLC publishes labels "
+    st.caption("Tips are recorded with the card payment, so every month TLC publishes labels for "
                f"that month's trips. Below an AUC of {AUC_FLOOR:.2f} the monthly job opens an alert.")
-    chart = perf.set_index("month")[["auc"]].assign(floor=AUC_FLOOR)
-    st.line_chart(chart, height=220)
+    if len(perf) >= 2:  # a line needs two months; one month is shown in the table only
+        chart = perf.set_index("month")[["auc"]].assign(floor=AUC_FLOOR)
+        st.line_chart(chart, height=220)
+    table = perf.rename(columns={"champion_version": "champion", "rows": "trips",
+                                 "high_tip_rate": "high-tip share"})
+    table["trips"] = table["trips"].map("{:,}".format)
+    table["status"] = table["below_floor"].map({True: "alert", False: "ok"})
+    st.dataframe(table.drop(columns=["below_floor"]), width="stretch", hide_index=True)
 
 # --------------------------------------------------------------------------
 # Section 3: drift

@@ -19,7 +19,9 @@ labels that month's trips.
 - A challenger is trained every month instead of only on drift: it costs a few minutes, and
   the promotion rule already refuses changes that are not real improvements.
 - The committed bundle is the registry of record for the deployed API and dashboard. Local
-  MLflow stays the registry for experiments (ADR 0004).
+  MLflow stays the registry for experiments (ADR 0004). The API serves the bundle with
+  `MODEL_SOURCE=bundle`, MLflow with `MODEL_SOURCE=mlflow`, and falls back from MLflow to the
+  bundle when MLflow has no champion; tests cover all three.
 
 ## Consequences
 - The dashboard shows each version's training and evaluation months, both AUCs, the interval,

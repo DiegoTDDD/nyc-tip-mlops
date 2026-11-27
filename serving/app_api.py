@@ -1,10 +1,14 @@
 """FastAPI serving layer for the NYC Taxi high-tip classifier.
 
-Loads the champion model straight from the MLflow Model Registry (no
-hard-coded file path) plus the zone target-encodings logged alongside it,
-then exposes a /predict endpoint that accepts the RAW fields of a taxi
-trip and performs the exact same feature engineering used in training
-before scoring. This guarantees train/serving parity.
+Loads the champion model from one of two registries (ADR 0007):
+  - MODEL_SOURCE=bundle: the committed serving_model/ bundle, which the monthly retrain loop
+    rewrites on promotion. This is the registry of record for the deployed model.
+  - MODEL_SOURCE=mlflow: the `champion` alias in the MLflow Model Registry, for local
+    experiments and the Docker stack.
+  - unset: MLflow first, then the bundle if MLflow has no champion.
+plus the zone target-encodings saved with it, then exposes a /predict endpoint that
+accepts the RAW fields of a taxi trip and performs the exact same feature engineering
+used in training before scoring. This guarantees train/serving parity.
 
 Endpoints
 ---------
@@ -24,6 +28,7 @@ Run locally
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import secrets
@@ -85,10 +90,18 @@ class Prediction(BaseModel):
 
 # --- Model state ------------------------------------------------------------
 # Filled at startup by load_model(); tests can set it directly.
-_state: dict[str, Any] = {"model": None, "version": None, "encodings": ZoneEncodings()}
+_state: dict[str, Any] = {
+    "model": None,
+    "version": None,
+    "encodings": ZoneEncodings(),
+    "source": None,
+}
 
 
 MLRUNS_DIR = os.environ.get("MLRUNS_DIR", "mlruns")
+BUNDLE_DIR = Path(
+    os.environ.get("MODEL_BUNDLE", Path(__file__).resolve().parents[1] / "serving_model")
+)
 
 
 def _to_local(uri: str) -> str | None:
@@ -127,7 +140,32 @@ def _load_from_local_mlruns(client: MlflowClient, mv: ModelVersion) -> tuple[Any
     return (mlflow.xgboost.load_model(model_dir), os.path.join(run_dir, "zone_encodings.json"))
 
 
+def _load_bundle() -> None:
+    """Load the champion the monthly loop committed to serving_model/."""
+    model = mlflow.xgboost.load_model(str(BUNDLE_DIR / "model"))
+    version = json.loads((BUNDLE_DIR / "champion.json").read_text(encoding="utf-8"))["version"]
+    _state["model"] = model
+    _state["version"] = str(version)
+    _state["encodings"] = ZoneEncodings.load(str(BUNDLE_DIR / "zone_encodings.json"))
+    _state["source"] = "bundle"
+
+
 def _load_model() -> None:
+    """Load the champion from the source MODEL_SOURCE names (see the module docstring)."""
+    source = os.environ.get("MODEL_SOURCE", "").lower()
+    if source == "bundle":
+        _load_bundle()
+        return
+    try:
+        _load_from_mlflow()
+    except Exception as exc:
+        if source == "mlflow":
+            raise
+        log.warning("No MLflow champion (%s); loading the committed bundle", exc)
+        _load_bundle()
+
+
+def _load_from_mlflow() -> None:
     """Load the champion model + its zone encodings from MLflow."""
     mlflow.set_tracking_uri(TRACKING_URI)
     client = MlflowClient()
@@ -148,11 +186,13 @@ def _load_model() -> None:
     _state["model"] = model
     _state["version"] = str(mv.version)  # MLflow 3 returns an int; the API always reports a string
     _state["encodings"] = ZoneEncodings.load(enc_path)
+    _state["source"] = "mlflow"
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Load the champion once at startup. A failure leaves the API up but /health returns 503."""
+    _state.update(model=None, version=None, source=None)  # nothing from a previous start
     try:
         _load_model()
         log.info("Loaded champion model version %s", _state["version"])
@@ -164,7 +204,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(
     title="NYC Taxi High-Tip Classifier",
     description="Predicts whether a taxi trip will yield a tip above 20% "
-    "of the fare. Model served from the MLflow Model Registry.",
+    "of the fare. The champion comes from the committed bundle the monthly retrain "
+    "promotes, or from the MLflow Model Registry (MODEL_SOURCE).",
     version="1.1.0",
     lifespan=lifespan,
 )
@@ -197,6 +238,7 @@ def root() -> dict:
         "service": "NYC Taxi High-Tip Classifier",
         "model": REGISTERED_MODEL_NAME,
         "model_version": _state["version"],
+        "model_source": _state.get("source"),
         "status": "ready" if _state["model"] is not None else "model_not_loaded",
         "docs": "/docs",
     }

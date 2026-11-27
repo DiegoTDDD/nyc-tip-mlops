@@ -25,7 +25,7 @@
 | Promotion rule | Same out-of-time month for both models; promoted only if the 95% paired-bootstrap interval of the gain is above zero ([ADR 0006](docs/adr/0006-promotion-on-a-shared-out-of-time-month.md)) |
 | Monthly loop | Newest TLC month found, champion's AUC recorded, challenger trained on the month before, decision committed, alert under AUC 0.60 ([ADR 0007](docs/adr/0007-monthly-retrain-loop.md)) |
 | Drift, Jan 2024 to Jan 2025 | Model features stable; `payment_type` drifted ("unknown" share 4% to 13%) |
-| Tests | 39: the feature code, the training-vs-API feature check, the promotion rule and its bootstrap, the monthly loop, reproducible training, a real MLflow registry, every API endpoint and the API key |
+| Tests | 42: the feature code, the training-vs-API feature check, the promotion rule and its bootstrap, the monthly loop, reproducible training, a real MLflow registry, serving from the committed bundle, every API endpoint and the API key |
 | CI | Lint, tests, an exact-versions install and API call, the Docker Compose stack, a monthly retrain on real data, a Windows run, a security audit and a live-app check |
 
 The project's value is the engineering around the model, not the score: tipping is hard to predict from trip data, and the leakage-free framing keeps AUC modest on purpose.
@@ -119,14 +119,14 @@ combination logged as a nested child run so they can be compared side by side.
 **Hyperparameter-search run — metrics and nested child runs**
 ![MLflow HPO](docs/screenshots/mlflow_hpo.png)
 
-**Model registry — the `champion` alias points at the best version**
+**Local MLflow registry (experiments) — the `champion` alias points at the best version; the deployed champion is the committed bundle above**
 ![Model registry](docs/screenshots/mlflow_registry.png)
 
 ---
 
 ## Monthly retraining on real data
 
-Tips are recorded with the card payment, so every month TLC publishes labels that month's
+Tips are recorded with the card payment, so every month TLC publishes labels for that month's
 trips. `training/retrain.py` uses that, and `.github/workflows/retrain.yml` runs it on the 20th
 of each month ([ADR 0007](docs/adr/0007-monthly-retrain-loop.md)):
 
@@ -152,7 +152,10 @@ The first run, evaluated on September 2026, replaced the January 2024 model:
 
 ## Serving the champion (FastAPI)
 
-The API loads the champion straight from the MLflow registry and builds the
+The API loads the champion from the committed `serving_model/` bundle the monthly loop
+promotes (`MODEL_SOURCE=bundle`, the registry of record), from the MLflow registry's
+`champion` alias (`MODEL_SOURCE=mlflow`, the Docker stack and local experiments), or, when
+unset, from MLflow with the bundle as fallback; `/` reports which. It builds the
 features with the same module training uses (`nyc_tip/features.py`), so a raw
 trip in equals the training feature row; a test checks this on 60 random trips.
 It loads the native XGBoost model and returns `predict_proba`
@@ -163,7 +166,7 @@ and `/predict/batch`. With `API_KEY` set, the prediction endpoints require the h
 **Interactive API docs — the four endpoints**
 ![API docs](docs/screenshots/api_docs.png)
 
-**`/predict` — request body filled in**
+**`/predict` — request body filled in, authorized with the `X-API-Key` header**
 ![API predict](docs/screenshots/api_predict.png)
 
 **`/predict` — successful response (HTTP 200)**
@@ -388,7 +391,7 @@ The suite trains two small models into a temporary MLflow store, so it needs the
 
 `.github/workflows/ci.yml` defines three jobs:
 
-- **test** — `ruff` (type hints required in `nyc_tip/`, `training/`, `serving/` and `monitoring/`, and no `print` there) and the 39 tests, on every push and pull request.
+- **test** — `ruff` (type hints required in `nyc_tip/`, `training/`, `serving/` and `monitoring/`, and no `print` there) and the 42 tests, on every push and pull request.
 - **pinned** — installs exactly `requirements.txt` (the documented versions), runs
   `pip check`, trains on the sample data, starts the API and calls `/health` and
   `/predict` (the answer must be a probability strictly between 0 and 1). This is what proves a dependency bump (for example MLflow)

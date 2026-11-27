@@ -1,5 +1,6 @@
 """The FastAPI service: endpoints with a stand-in model, then with the real trained champion."""
 
+import json
 import os
 from datetime import datetime, timedelta
 
@@ -105,6 +106,30 @@ def test_the_real_champion_loads_from_the_registry_and_predicts(registry, monkey
         os.chdir(previous)
     # A probability, not the class: the pyfunc wrapper used to return exactly 0 or 1.
     assert 0.0 < proba < 1.0
+
+
+def test_the_committed_bundle_is_served_when_asked(monkeypatch):
+    monkeypatch.setenv("MODEL_SOURCE", "bundle")
+    with TestClient(app_api.app) as http:
+        root = http.get("/").json()
+        proba = http.post("/predict", json=TRIP).json()["high_tip_probability"]
+    champion = json.loads((app_api.BUNDLE_DIR / "champion.json").read_text())["version"]
+    assert root["model_version"] == str(champion) and root["model_source"] == "bundle"
+    assert 0.0 < proba < 1.0
+
+
+def test_without_an_mlflow_champion_the_bundle_is_the_fallback(monkeypatch, tmp_path):
+    monkeypatch.delenv("MODEL_SOURCE", raising=False)
+    monkeypatch.setattr(app_api, "TRACKING_URI", f"sqlite:///{tmp_path / 'empty.db'}")
+    with TestClient(app_api.app) as http:
+        assert http.get("/").json()["model_source"] == "bundle"
+
+
+def test_mlflow_only_does_not_fall_back(monkeypatch, tmp_path):
+    monkeypatch.setenv("MODEL_SOURCE", "mlflow")
+    monkeypatch.setattr(app_api, "TRACKING_URI", f"sqlite:///{tmp_path / 'empty.db'}")
+    with TestClient(app_api.app) as http:
+        assert http.get("/health").status_code == 503
 
 
 def test_an_api_key_protects_the_prediction_endpoints(client, monkeypatch):
