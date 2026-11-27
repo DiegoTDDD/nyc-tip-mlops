@@ -60,6 +60,22 @@ API_URL = os.environ.get("PREDICT_API_URL", "http://localhost:8000")
 # --------------------------------------------------------------------------
 # Data loading helpers (cached)
 # --------------------------------------------------------------------------
+def files_stamp(*paths: str) -> tuple:
+    """Modification times of the files a loader reads, passed to it as a cache key.
+
+    Streamlit Cloud updates a running app in place on every push and keeps st.cache_data
+    results whose function code did not change, so without this key a new champion or a new
+    month in the committed files stayed hidden behind the old cached result.
+    """
+    return tuple(os.path.getmtime(p) if os.path.exists(p) else 0.0 for p in paths)
+
+
+REGISTRY_FILES = (
+    os.path.join(SERVING_MODEL_DIR, "registry_history.json"),
+    os.path.join(SERVING_MODEL_DIR, "champion.json"),
+    "mlflow.db",
+)
+
 @st.cache_resource(show_spinner=False)
 def get_mlflow_client():
     import mlflow
@@ -69,7 +85,7 @@ def get_mlflow_client():
 
 
 @st.cache_data(show_spinner=False)
-def load_registry_history() -> pd.DataFrame:
+def load_registry_history(stamp: tuple = ()) -> pd.DataFrame:
     """All registered versions + their validation AUC.
 
     Prefers the live MLflow registry; falls back to the version-controlled
@@ -111,7 +127,7 @@ def load_registry_history() -> pd.DataFrame:
 
 
 @st.cache_data(show_spinner=False)
-def load_performance() -> pd.DataFrame:
+def load_performance(stamp: tuple = ()) -> pd.DataFrame:
     """The champion's AUC on each newly published month (training/retrain.py)."""
     if not os.path.exists(PERFORMANCE_PATH):
         return pd.DataFrame()
@@ -120,7 +136,7 @@ def load_performance() -> pd.DataFrame:
 
 
 @st.cache_data(show_spinner=False)
-def load_drift_summary() -> dict | None:
+def load_drift_summary(stamp: tuple = ()) -> dict | None:
     if not os.path.exists(DRIFT_SUMMARY_PATH):
         return None
     with open(DRIFT_SUMMARY_PATH) as f:
@@ -128,7 +144,7 @@ def load_drift_summary() -> dict | None:
 
 
 @st.cache_resource(show_spinner=False)
-def load_local_model():
+def load_local_model(stamp: tuple = ()):
     """Champion model + zone encodings for live prediction.
 
     Prefers the live MLflow registry; falls back to the version-controlled
@@ -174,8 +190,8 @@ st.caption(
     "monitoring (Evidently). This dashboard is the operations console."
 )
 
-history = load_registry_history()
-drift = load_drift_summary()
+history = load_registry_history(stamp=files_stamp(*REGISTRY_FILES))
+drift = load_drift_summary(stamp=files_stamp(DRIFT_SUMMARY_PATH))
 
 # --------------------------------------------------------------------------
 # Section 1 + 2: champion card and registry history
@@ -214,14 +230,17 @@ else:
         show["gain_ci"] = show["gain_ci"].map(
             lambda ci: f"[{ci[0]:+.4f}, {ci[1]:+.4f}]" if isinstance(ci, list) else "")
     # Versions from before the monthly loop were judged on validation AUC only.
-    show = show.astype(object).where(show.notna(), "—")
+    for col in ("eval_auc", "champion_eval_auc", "val_auc"):
+        if col in show:
+            show[col] = show[col].map(lambda v: f"{v:.4f}" if pd.notna(v) else None)
+    show = show.astype(object).where(show.notna(), "—").astype(str)
     st.dataframe(show, width="stretch", hide_index=True)
     if "reason" in history.columns and pd.notna(history.iloc[-1].get("reason")):
         last = history.iloc[-1]
         st.info(f"Last decision (v{int(last['version'])}, trained on {last['trained_on']}, "
                 f"evaluated on {last['evaluated_on']}): {last['reason']}.")
 
-perf = load_performance()
+perf = load_performance(stamp=files_stamp(PERFORMANCE_PATH))
 if not perf.empty:
     st.subheader("Champion performance on each new month")
     st.caption("Tips are recorded with the card payment, so every month TLC publishes labels for "
@@ -319,7 +338,7 @@ if submitted:
         # Fall back to the local model.
         if proba is None:
             try:
-                model, pu_map, do_map, pu_prior, do_prior, _ = load_local_model()
+                model, pu_map, do_map, pu_prior, do_prior, _ = load_local_model(stamp=files_stamp(*REGISTRY_FILES))
                 X = trip_features(dist, pickup_dt, dropoff_dt, int(pu_id), int(do_id), int(pax),
                                   ZoneEncodings(pu_map, do_map, pu_prior, do_prior))
                 proba = float(model.predict_proba(X)[0, 1])
