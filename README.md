@@ -47,7 +47,7 @@ NYC Taxi parquet (2024 train / 2025 production)
         │                     ─► paired bootstrap on the same rows ─► serving_model/ + history
         │                        │
         │                        ▼
-        │                  FastAPI /predict  (loads champion from registry)
+        │                  FastAPI /predict  (champion from serving_model/ or MLflow)
         ▼
   Evidently drift report  ──►  monitoring/drift_summary.json
         │
@@ -67,7 +67,9 @@ tip more than 20% of the fare. That is the moment the payment screen in the cab
 offers tip choices, and every feature the model uses is known by then. The data is the public NYC TLC Yellow Taxi
 trip records: **January 2024** as the training reference and **January
 2025** as the production/drift period (the month following NYC's
-congestion-pricing rollout).
+congestion-pricing rollout). Since the monthly loop, each new champion is trained on
+the most recent published month and judged on the month after it (the first run:
+August and September 2026).
 
 ### Modeling honesty (no leakage)
 
@@ -399,7 +401,10 @@ The suite trains two small models into a temporary MLflow store, so it needs the
 - **docker** — trains a sample model on the runner, runs `docker compose up --build`,
   waits for the API and the MLflow UI, calls `/predict` and checks that the published
   ports are bound to `127.0.0.1`.
-Three more workflows run next to it:
+Four more workflows run next to it:
+
+- `windows-check.yml` runs the README on Windows with Git Bash and conda (environment,
+  tests, training with the SQLite MLflow registry, the API), every month and on demand.
 
 - `retrain.yml` runs the monthly loop on real TLC data on the 20th of each month (and on
   demand), checks that a promoted bundle loads and predicts, commits the decision and the

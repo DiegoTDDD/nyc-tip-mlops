@@ -1,6 +1,6 @@
 # 0004. Local MLflow (SQLite + files) and a committed champion bundle for the public dashboard
 
-**Status:** Accepted
+**Status:** Accepted. Since [ADR 0007](0007-monthly-retrain-loop.md) the monthly loop writes the bundle on promotion, which makes it the registry of record for the deployed model; the API serves it with `MODEL_SOURCE=bundle`, and the dashboard's caches are keyed on its files so a new champion shows up after a push.
 
 ## Context
 The model registry needs a database backend, and the project must run on one machine at no cost. The public dashboard runs on Streamlit Community Cloud, which has neither the MLflow store nor Docker.

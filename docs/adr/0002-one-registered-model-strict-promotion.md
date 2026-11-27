@@ -1,6 +1,6 @@
 # 0002. Only train_v2.py registers; a new version must beat the champion's AUC
 
-**Status:** Accepted. Before this, `train.py` (the baseline) registered versions too.
+**Status:** Accepted for who registers. The promotion rule below is superseded by [ADR 0006](0006-promotion-on-a-shared-out-of-time-month.md): both models are now scored on the same out-of-time month and the gain must clear a paired bootstrap; `should_promote` was removed, and the weekly CI retrain gave way to the monthly loop of [ADR 0007](0007-monthly-retrain-loop.md). Before this ADR, `train.py` (the baseline) registered versions too.
 
 ## Context
 The API loads whatever version holds the `champion` alias and sends it the features that `nyc_tip/features.py` builds. The baseline trainer used different inputs: raw zone ids and no engineered features. It nonetheless registered under the same model name and could take the alias whenever its AUC was higher. The API would then have sent it columns it was not trained on.
