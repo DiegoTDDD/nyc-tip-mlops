@@ -114,6 +114,9 @@ def pypi(path):
 # never forgotten, such a line must be followed by a directive such as
 #     # audit-git-pin: nltk newer-than 3.10.3
 # and this check FAILS as soon as PyPI has a release newer than that version with no known vulnerability.
+# A pin to another repository of the same GitHub owner (GITHUB_REPOSITORY_OWNER, set by Actions) is
+# first-party: it is never released to PyPI, and its own security workflow audits its requirements.
+OWNER = os.environ.get("GITHUB_REPOSITORY_OWNER", "").lower()
 watch_errors = []
 for f in files:
     lines = open(f, encoding="utf-8").read().splitlines()
@@ -127,6 +130,9 @@ for f in files:
             continue
         name = l.split("@")[0].strip().split("[")[0]
         base = directives.get(name.lower())
+        if OWNER and f"github.com/{OWNER}/" in l.lower():
+            print(f"note: {f}: {name} is a first-party git pin, audited in its own repository")
+            continue
         print(f"note: {f}: {name} is installed from a pinned git commit")
         if base is None:
             watch_errors.append(f"{f}: {name} is pinned to a git commit but has no '# audit-git-pin: {name} newer-than <version>' line, so nothing watches for a fixed release")
